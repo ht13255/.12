@@ -9,7 +9,7 @@ import pandas as pd
 st.title("StatsBomb Data Dashboard with PDF Export")
 
 # Load competitions
-st.header("Step 1: Select Competition and Date")
+st.header("Step 1: Select Competition, Date, and Teams")
 competitions = sb.competitions()
 
 # Competition selection
@@ -18,6 +18,9 @@ competition_id = competitions[competitions['competition_name'] == competition_na
 
 # Date input for the match
 match_date_input = st.text_input("Enter Match Date (DD/MM/YY)", placeholder="e.g., 01/06/19")
+
+# Team input (home or away)
+team_name = st.text_input("Enter Team Name", placeholder="e.g., Manchester United")
 
 # Parse the date input
 if match_date_input:
@@ -30,14 +33,21 @@ if match_date_input:
         
         # Filter matches by date
         matches['match_date'] = pd.to_datetime(matches['date'])
-        selected_match = matches[matches['match_date'].dt.strftime('%d/%m/%y') == match_date_input]
+        filtered_matches = matches[matches['match_date'].dt.strftime('%d/%m/%y') == match_date_input]
         
-        if not selected_match.empty:
+        # Further filter by team name
+        if team_name:
+            filtered_matches = filtered_matches[
+                (filtered_matches['home_team'].str.contains(team_name, case=False)) | 
+                (filtered_matches['away_team'].str.contains(team_name, case=False))
+            ]
+        
+        if not filtered_matches.empty:
             st.write("Matching Matches Found:")
-            st.dataframe(selected_match)
+            st.dataframe(filtered_matches)
 
             # Select a match
-            match_id = selected_match['match_id'].values[0]
+            match_id = filtered_matches['match_id'].values[0]
             st.header("Step 2: Visualize and Export Match Data")
             events = sb.events(match_id=match_id)
             st.write(events.head())
@@ -74,9 +84,10 @@ if match_date_input:
                 pdf.cell(200, 10, txt="Match Stats Report", ln=True, align="C")
 
                 # Add basic match info
-                pdf.cell(200, 10, txt=f"Competition: {selected_match['competition_name'].values[0]}", ln=True)
+                match_info = filtered_matches[filtered_matches['match_id'] == match_id]
+                pdf.cell(200, 10, txt=f"Competition: {match_info['competition_name'].values[0]}", ln=True)
                 pdf.cell(200, 10, txt=f"Date: {match_date.strftime('%d/%m/%Y')}", ln=True)
-                pdf.cell(200, 10, txt=f"Match: {selected_match['home_team'].values[0]} vs {selected_match['away_team'].values[0]}", ln=True)
+                pdf.cell(200, 10, txt=f"Match: {match_info['home_team'].values[0]} vs {match_info['away_team'].values[0]}", ln=True)
 
                 # Add sample stats (e.g., passes)
                 pdf.ln(10)
@@ -98,6 +109,6 @@ if match_date_input:
                     mime="application/pdf",
                 )
         else:
-            st.write("No matching matches found for the entered date.")
+            st.write("No matching matches found for the entered date and team.")
     except ValueError:
         st.error("Invalid date format. Please use DD/MM/YY.")
