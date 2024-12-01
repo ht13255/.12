@@ -16,6 +16,11 @@ competitions = sb.competitions()
 competition_name = st.selectbox("Select Competition", competitions['competition_name'].unique())
 competition_id = competitions[competitions['competition_name'] == competition_name]['competition_id'].values[0]
 
+# Load seasons for the selected competition
+seasons = sb.seasons(competition_id=competition_id)
+season_name = st.selectbox("Select Season", seasons['season_name'].unique())
+season_id = seasons[seasons['season_name'] == season_name]['season_id'].values[0]
+
 # Date input for the match
 match_date_input = st.text_input("Enter Match Date (DD/MM/YY)", placeholder="e.g., 01/06/19")
 
@@ -29,7 +34,7 @@ if match_date_input:
         st.write(f"Selected Date: {match_date.strftime('%d/%m/%Y')}")
         
         # Load matches for the selected competition and season
-        matches = sb.matches(competition_id=competition_id)
+        matches = sb.matches(competition_id=competition_id, season_id=season_id)
         
         # Filter matches by date
         matches['match_date'] = pd.to_datetime(matches['date'])
