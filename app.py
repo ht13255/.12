@@ -16,10 +16,9 @@ competitions = sb.competitions()
 competition_name = st.selectbox("Select Competition", competitions['competition_name'].unique())
 competition_id = competitions[competitions['competition_name'] == competition_name]['competition_id'].values[0]
 
-# Load seasons for the selected competition
-seasons = sb.seasons(competition_id=competition_id)
-season_name = st.selectbox("Select Season", seasons['season_name'].unique())
-season_id = seasons[seasons['season_name'] == season_name]['season_id'].values[0]
+# Manually set the season_id (replace with valid season ID)
+# For example: '2020-2021', '2021-2022', etc. You can fetch this data from StatsBomb or manually input it.
+season_id = st.selectbox("Select Season", ['2020-2021', '2021-2022', '2022-2023', '2023-2024'])
 
 # Date input for the match
 match_date_input = st.text_input("Enter Match Date (DD/MM/YY)", placeholder="e.g., 01/06/19")
