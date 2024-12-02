@@ -23,11 +23,11 @@ team_name = st.text_input("Enter Team Name", placeholder="e.g., Manchester Unite
 if competition_id and season_id and team_name:
     st.write("Fetching match data for the selected team...")
 
-    # Load matches for the selected competition and season
     try:
+        # Fetch matches for the selected competition and season using statsbombpy
         matches = sb.matches(competition_id=competition_id, season_id=season_id)
 
-        # Filter matches by team
+        # Filter matches by team (home or away)
         filtered_matches = matches[
             (matches['home_team'].str.contains(team_name, case=False)) | 
             (matches['away_team'].str.contains(team_name, case=False))
@@ -44,5 +44,6 @@ if competition_id and season_id and team_name:
 
         else:
             st.write(f"No matches found for {team_name} in the {season_id} season.")
+    
     except Exception as e:
         st.error(f"Error fetching data: {e}")
