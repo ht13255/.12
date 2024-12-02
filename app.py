@@ -24,22 +24,25 @@ if competition_id and season_id and team_name:
     st.write("Fetching match data for the selected team...")
 
     # Load matches for the selected competition and season
-    matches = sb.matches(competition_id=competition_id, season_id=season_id)
+    try:
+        matches = sb.matches(competition_id=competition_id, season_id=season_id)
 
-    # Filter matches by team
-    filtered_matches = matches[
-        (matches['home_team'].str.contains(team_name, case=False)) | 
-        (matches['away_team'].str.contains(team_name, case=False))
-    ]
+        # Filter matches by team
+        filtered_matches = matches[
+            (matches['home_team'].str.contains(team_name, case=False)) | 
+            (matches['away_team'].str.contains(team_name, case=False))
+        ]
 
-    if not filtered_matches.empty:
-        st.write(f"Matches for {team_name} in {season_id}:")
-        match_dates = filtered_matches[['home_team', 'away_team', 'date']]
-        
-        # Show dates of the matches
-        match_dates['date'] = pd.to_datetime(match_dates['date'])
-        match_dates_sorted = match_dates.sort_values(by='date', ascending=True)
-        st.dataframe(match_dates_sorted[['home_team', 'away_team', 'date']])
+        if not filtered_matches.empty:
+            st.write(f"Matches for {team_name} in {season_id}:")
+            match_dates = filtered_matches[['home_team', 'away_team', 'date']]
+            
+            # Show dates of the matches
+            match_dates['date'] = pd.to_datetime(match_dates['date'])
+            match_dates_sorted = match_dates.sort_values(by='date', ascending=True)
+            st.dataframe(match_dates_sorted[['home_team', 'away_team', 'date']])
 
-    else:
-        st.write(f"No matches found for {team_name} in the {season_id} season.")
+        else:
+            st.write(f"No matches found for {team_name} in the {season_id} season.")
+    except Exception as e:
+        st.error(f"Error fetching data: {e}")
