@@ -4,7 +4,6 @@ from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import os
 
@@ -23,7 +22,7 @@ def get_links_from_website(url):
             a['href'] for a in soup.find_all('a', href=True)
             if not is_social_media_link(a['href'])  # SNS 링크 제외
         ]
-        # 절대 경로 변환
+        # 상대 경로를 절대 경로로 변환
         links = [link if link.startswith("http") else requests.compat.urljoin(url, link) for link in links]
         return links
     except Exception as e:
@@ -64,7 +63,12 @@ def main():
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--disable-gpu")
             chrome_options.add_argument("--no-sandbox")
-            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.binary_location = "/usr/bin/google-chrome"  # Streamlit Cloud에 설치된 Chrome 위치
+            driver = webdriver.Chrome(
+                service=Service("/usr/bin/chromedriver"),  # Streamlit Cloud에 설치된 ChromeDriver 위치
+                options=chrome_options
+            )
 
             saved_count = 0
             for link in links:
