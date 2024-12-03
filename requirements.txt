@@ -1,6 +1,4 @@
-streamlit
-statsbombpy
-fpdf
-mplsoccer
-matplotlib
-pandas
+streamlit 
+beautifulsoup4
+selenium
+reportlab
