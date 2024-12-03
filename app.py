@@ -1,49 +1,79 @@
 import streamlit as st
-from statsbombpy import sb
-import pandas as pd
+from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
+import time
+import os
 
-# Streamlit Title
-st.title("StatsBomb Data Dashboard - Match Dates for Selected Team")
 
-# Load competitions
-st.header("Step 1: Select Competition and Season")
-competitions = sb.competitions()
+def is_social_media_link(link):
+    social_keywords = ["facebook", "twitter", "instagram", "linkedin", "youtube", "tiktok"]
+    return any(keyword in link for keyword in social_keywords)
 
-# Competition selection
-competition_name = st.selectbox("Select Competition", competitions['competition_name'].unique())
-competition_id = competitions[competitions['competition_name'] == competition_name]['competition_id'].values[0]
 
-# Manually set the season_id (replace with valid season ID)
-season_id = st.selectbox("Select Season", ['2020-2021', '2021-2022', '2022-2023', '2023-2024'])
-
-# Team input (home or away)
-team_name = st.text_input("Enter Team Name", placeholder="e.g., Manchester United")
-
-# Fetch matches for the selected competition and season
-if competition_id and season_id and team_name:
-    st.write("Fetching match data for the selected team...")
-
+def get_links_from_website(url):
     try:
-        # Fetch matches for the selected competition and season using statsbombpy
-        matches = sb.matches(competition_id=competition_id, season_id=season_id)
-
-        # Filter matches by team (home or away)
-        filtered_matches = matches[
-            (matches['home_team'].str.contains(team_name, case=False)) | 
-            (matches['away_team'].str.contains(team_name, case=False))
-        ]
-
-        if not filtered_matches.empty:
-            st.write(f"Matches for {team_name} in {season_id}:")
-            match_dates = filtered_matches[['home_team', 'away_team', 'date']]
-            
-            # Show dates of the matches
-            match_dates['date'] = pd.to_datetime(match_dates['date'])
-            match_dates_sorted = match_dates.sort_values(by='date', ascending=True)
-            st.dataframe(match_dates_sorted[['home_team', 'away_team', 'date']])
-
-        else:
-            st.write(f"No matches found for {team_name} in the {season_id} season.")
-    
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, "html.parser")
+        links = [a['href'] for a in soup.find_all('a', href=True) if not is_social_media_link(a['href'])]
+        return links
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"Error fetching links: {e}")
+        return []
+
+
+def save_page_as_pdf(url, output_path, driver):
+    try:
+        driver.get(url)
+        time.sleep(2)  # Wait for the page to load
+        pdf_path = os.path.join(output_path, f"{url.replace('https://', '').replace('/', '_')}.pdf")
+        driver.execute_script('window.print();')
+        return True
+    except Exception as e:
+        st.error(f"Error saving {url} as PDF: {e}")
+        return False
+
+
+def main():
+    st.title("웹사이트 링크를 PDF로 저장")
+    
+    url = st.text_input("웹사이트 URL을 입력하세요", "https://example.com")
+    output_folder = "saved_pdfs"
+    os.makedirs(output_folder, exist_ok=True)
+
+    if st.button("PDF 저장 시작"):
+        st.info("링크를 수집 중입니다...")
+        links = get_links_from_website(url)
+
+        if links:
+            st.success(f"{len(links)}개의 링크를 발견했습니다!")
+            st.info("PDF로 저장 중...")
+            
+            # Selenium 설정
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--no-sandbox")
+            driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
+
+            saved_count = 0
+            for link in links:
+                if save_page_as_pdf(link, output_folder, driver):
+                    saved_count += 1
+
+            driver.quit()
+            st.success(f"{saved_count}/{len(links)} 페이지를 PDF로 저장했습니다.")
+        else:
+            st.warning("링크를 찾을 수 없습니다.")
+
+    st.info(f"PDF는 '{output_folder}' 폴더에 저장됩니다.")
+
+
+if __name__ == "__main__":
+    main()
