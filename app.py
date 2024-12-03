@@ -1,10 +1,7 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
-import time
+import pdfkit
 import os
 
 def is_social_media_link(link):
@@ -29,35 +26,15 @@ def get_links_from_website(url):
         st.error(f"Error fetching links: {e}")
         return []
 
-def save_page_as_pdf(url, output_path, driver):
+def save_page_as_pdf(url, output_folder):
     """페이지를 PDF로 저장"""
     try:
-        driver.get(url)
-        time.sleep(2)  # 페이지 로드 대기
-        pdf_path = os.path.join(output_path, f"{url.replace('https://', '').replace('/', '_')}.pdf")
-        with open(pdf_path, "wb") as f:
-            f.write(driver.execute_cdp_cmd("Page.printToPDF", {"printBackground": True})["data"].encode("utf-8"))
+        pdf_path = os.path.join(output_folder, f"{url.replace('https://', '').replace('/', '_')}.pdf")
+        pdfkit.from_url(url, pdf_path)  # pdfkit을 사용하여 URL을 PDF로 변환
         return True
     except Exception as e:
         st.error(f"Error saving {url} as PDF: {e}")
         return False
-
-def setup_driver():
-    """ChromeDriver 설정"""
-    try:
-        chrome_options = Options()
-        chrome_options.add_argument("--headless")
-        chrome_options.add_argument("--disable-gpu")
-        chrome_options.add_argument("--no-sandbox")
-        chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.binary_location = "/usr/bin/google-chrome"  # Streamlit Cloud에 설치된 Chrome 위치
-        return webdriver.Chrome(
-            service=Service("/usr/bin/chromedriver"),  # Streamlit Cloud에 설치된 ChromeDriver 위치
-            options=chrome_options
-        )
-    except Exception as e:
-        st.error(f"Error setting up ChromeDriver: {e}")
-        return None
 
 def main():
     st.title("웹사이트 링크를 PDF로 저장")
@@ -75,17 +52,11 @@ def main():
             st.success(f"{len(links)}개의 링크를 발견했습니다!")
             st.info("PDF로 저장 중...")
 
-            driver = setup_driver()
-            if not driver:
-                st.error("ChromeDriver 설정에 실패했습니다.")
-                return
-
             saved_count = 0
             for link in links:
-                if save_page_as_pdf(link, output_folder, driver):
+                if save_page_as_pdf(link, output_folder):
                     saved_count += 1
 
-            driver.quit()
             st.success(f"{saved_count}/{len(links)} 페이지를 PDF로 저장했습니다.")
         else:
             st.warning("링크를 찾을 수 없습니다.")
