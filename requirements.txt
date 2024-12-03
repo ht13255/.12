@@ -1,4 +1,4 @@
-streamlit 
+streamlit
 beautifulsoup4
 selenium
-reportlab
+webdriver-manager
