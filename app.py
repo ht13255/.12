@@ -26,11 +26,11 @@ def get_links_from_website(url):
         st.error(f"Error fetching links: {e}")
         return []
 
-def save_page_as_pdf(url, output_folder):
+def save_page_as_pdf(url, output_folder, pdfkit_config):
     """페이지를 PDF로 저장"""
     try:
         pdf_path = os.path.join(output_folder, f"{url.replace('https://', '').replace('/', '_')}.pdf")
-        pdfkit.from_url(url, pdf_path)  # pdfkit을 사용하여 URL을 PDF로 변환
+        pdfkit.from_url(url, pdf_path, configuration=pdfkit_config)  # pdfkit을 사용하여 URL을 PDF로 변환
         return True
     except Exception as e:
         st.error(f"Error saving {url} as PDF: {e}")
@@ -44,6 +44,11 @@ def main():
     output_folder = "saved_pdfs"
     os.makedirs(output_folder, exist_ok=True)  # 출력 폴더 생성
 
+    # wkhtmltopdf 경로 설정
+    wkhtmltopdf_path = "/usr/local/bin/wkhtmltopdf"  # Linux/MacOS용 기본 경로
+    # Windows의 경우: wkhtmltopdf_path = r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe"
+    pdfkit_config = pdfkit.configuration(wkhtmltopdf=wkhtmltopdf_path)
+
     if st.button("PDF 저장 시작"):
         st.info("링크를 수집 중입니다...")
         links = get_links_from_website(url)
@@ -54,7 +59,7 @@ def main():
 
             saved_count = 0
             for link in links:
-                if save_page_as_pdf(link, output_folder):
+                if save_page_as_pdf(link, output_folder, pdfkit_config):
                     saved_count += 1
 
             st.success(f"{saved_count}/{len(links)} 페이지를 PDF로 저장했습니다.")
