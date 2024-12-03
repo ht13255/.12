@@ -42,6 +42,23 @@ def save_page_as_pdf(url, output_path, driver):
         st.error(f"Error saving {url} as PDF: {e}")
         return False
 
+def setup_driver():
+    """ChromeDriver 설정"""
+    try:
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")
+        chrome_options.add_argument("--disable-gpu")
+        chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.binary_location = "/usr/bin/google-chrome"  # Streamlit Cloud에 설치된 Chrome 위치
+        return webdriver.Chrome(
+            service=Service("/usr/bin/chromedriver"),  # Streamlit Cloud에 설치된 ChromeDriver 위치
+            options=chrome_options
+        )
+    except Exception as e:
+        st.error(f"Error setting up ChromeDriver: {e}")
+        return None
+
 def main():
     st.title("웹사이트 링크를 PDF로 저장")
 
@@ -58,17 +75,10 @@ def main():
             st.success(f"{len(links)}개의 링크를 발견했습니다!")
             st.info("PDF로 저장 중...")
 
-            # Selenium 설정
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.binary_location = "/usr/bin/google-chrome"  # Streamlit Cloud에 설치된 Chrome 위치
-            driver = webdriver.Chrome(
-                service=Service("/usr/bin/chromedriver"),  # Streamlit Cloud에 설치된 ChromeDriver 위치
-                options=chrome_options
-            )
+            driver = setup_driver()
+            if not driver:
+                st.error("ChromeDriver 설정에 실패했습니다.")
+                return
 
             saved_count = 0
             for link in links:
