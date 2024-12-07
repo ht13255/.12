@@ -1,4 +1,3 @@
-import re
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -8,6 +7,7 @@ import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import time
+import re
 
 # SNS 도메인 목록
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
@@ -16,20 +16,6 @@ SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
-
-# 텍스트 정리 함수
-def clean_text(text):
-    try:
-        # 불필요한 문구 및 줄바꿈 제거
-        text = re.sub(r'\\n|\\t', ' ', text)  # `\n`과 `\t` 제거
-        text = re.sub(r'쿠키', '', text, flags=re.IGNORECASE)  # "쿠키" 제거
-        text = re.sub(r' +', ' ', text)  # 다중 공백을 단일 공백으로 치환
-        text = text.strip()  # 앞뒤 공백 제거
-        text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
-        return text
-    except Exception as e:
-        st.warning(f"텍스트 정리 중 오류 발생: {e}")
-        return ""
 
 # 링크를 수집하는 함수
 def collect_links(base_url):
@@ -118,6 +104,19 @@ def crawl_content_multithread(links):
 
     return content_data
 
+# 텍스트 정리 함수
+def clean_text(text):
+    try:
+        # 공백, 불필요한 줄바꿈 및 특정 단어 제거
+        text = text.strip()
+        text = re.sub(r'\n+', '\n', text)  # 연속된 줄바꿈 제거
+        text = re.sub(r'cookie|Cookie|/n', '', text, flags=re.IGNORECASE)  # 'cookie' 및 '/n' 제거
+        text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
+        return text
+    except Exception as e:
+        st.warning(f"텍스트 정리 중 오류 발생: {e}")
+        return ""
+
 # 데이터 저장 함수 (JSON 및 CSV)
 def save_data(data, file_format):
     try:
@@ -181,12 +180,14 @@ if start_crawl and url_input:
             if file_path:
                 try:
                     with open(file_path, "rb") as f:
-                        st.download_button(
+                        download_button = st.download_button(
                             label=f"크롤링 결과 다운로드 ({file_format.upper()})",
                             data=f,
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
+                    if download_button:
+                        time.sleep(300)  # 다운로드 버튼 최소 5분 유지
                 except Exception as e:
                     st.error(f"파일 다운로드 중 오류 발생: {e}")
     else:
