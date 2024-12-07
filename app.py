@@ -1,5 +1,4 @@
-# 파일 경로: app.py
-
+import re
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -8,9 +7,29 @@ import math
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 # SNS 도메인 목록
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
+
+# 사용자 에이전트 설정
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
+}
+
+# 텍스트 정리 함수
+def clean_text(text):
+    try:
+        # 불필요한 문구 및 줄바꿈 제거
+        text = re.sub(r'\\n|\\t', ' ', text)  # `\n`과 `\t` 제거
+        text = re.sub(r'쿠키', '', text, flags=re.IGNORECASE)  # "쿠키" 제거
+        text = re.sub(r' +', ' ', text)  # 다중 공백을 단일 공백으로 치환
+        text = text.strip()  # 앞뒤 공백 제거
+        text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
+        return text
+    except Exception as e:
+        st.warning(f"텍스트 정리 중 오류 발생: {e}")
+        return ""
 
 # 링크를 수집하는 함수
 def collect_links(base_url):
@@ -25,7 +44,7 @@ def collect_links(base_url):
         visited.add(url)
 
         try:
-            response = requests.get(url, timeout=10)
+            response = requests.get(url, headers=HEADERS, timeout=10)
             response.raise_for_status()
         except requests.RequestException as e:
             st.warning(f"링크 수집 중 오류 발생: {url} ({e})")
@@ -52,42 +71,52 @@ def collect_links(base_url):
     
     return collected_links
 
+# 요청 재시도 및 프록시 설정 포함
+def fetch_content(url, retries=3, delay=5, use_proxy=False):
+    proxies = {
+        "http": "http://your_proxy:port",
+        "https": "https://your_proxy:port"
+    } if use_proxy else None
+
+    for i in range(retries):
+        try:
+            response = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
+            response.raise_for_status()
+            time.sleep(1)  # 요청 간 1초 지연
+            return response.text
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code in [429, 503]:  # Too Many Requests 또는 Service Unavailable
+                if i < retries - 1:
+                    time.sleep(delay)  # 딜레이 후 재시도
+                else:
+                    return f"Error: HTTP {e.response.status_code} ({e})"
+            else:
+                return f"Error: HTTP {e.response.status_code} ({e})"
+        except requests.RequestException as e:
+            if i < retries - 1:
+                time.sleep(delay)
+            else:
+                return f"Error: Unable to fetch content ({e})"
+
 # 멀티스레딩을 이용한 내용 크롤링 함수
 def crawl_content_multithread(links):
     content_data = []
 
-    def fetch_content(link):
+    def fetch_and_parse_content(link):
+        html = fetch_content(link, retries=3, delay=5, use_proxy=False)
         try:
-            response = requests.get(link, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
+            soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text(separator="\n")
             text = clean_text(text)
             return {"url": link, "content": text}
-        except requests.RequestException as e:
-            return {"url": link, "content": f"Error: Unable to fetch content ({e})"}
         except Exception as e:
-            return {"url": link, "content": f"Unexpected error occurred: {e}"}
+            return {"url": link, "content": f"Error parsing content: {e}"}
 
-    try:
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(fetch_content, links))
-            content_data.extend(results)
-    except Exception as e:
-        st.error(f"멀티스레딩 크롤링 중 오류 발생: {e}")
-    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(fetch_and_parse_content, links))
+        content_data.extend(results)
+
     return content_data
-
-# 텍스트 정리 함수
-def clean_text(text):
-    try:
-        # 공백 및 불필요한 줄바꿈 제거
-        text = text.strip()
-        text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
-        return text
-    except Exception as e:
-        st.warning(f"텍스트 정리 중 오류 발생: {e}")
-        return ""
 
 # 데이터 저장 함수 (JSON 및 CSV)
 def save_data(data, file_format):
@@ -105,21 +134,6 @@ def save_data(data, file_format):
     except Exception as e:
         st.error(f"데이터 저장 중 오류 발생: {e}")
     return None
-
-# 페이징 처리 함수
-def display_paginated_results(data, page, results_per_page):
-    try:
-        start = (page - 1) * results_per_page
-        end = start + results_per_page
-        for item in data[start:end]:
-            st.subheader(item["url"])
-            st.text(item["content"][:1000])  # 긴 텍스트를 줄여 표시
-
-        total_pages = math.ceil(len(data) / results_per_page)
-        return total_pages
-    except Exception as e:
-        st.error(f"페이징 처리 중 오류 발생: {e}")
-        return 0
 
 # URL 유효성 검사 함수
 def is_valid_url(url):
