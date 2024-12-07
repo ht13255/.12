@@ -104,15 +104,24 @@ def crawl_content_multithread(links):
 
     return content_data
 
-# 텍스트 정리 함수
+# 텍스트 정리 함수 (가이드라인 제거)
 def clean_text(text):
     try:
-        # 공백, 불필요한 줄바꿈 및 특정 단어 제거
+        # 공백, 불필요한 줄바꿈 제거
         text = text.strip()
-        text = re.sub(r'\n+', '\n', text)  # 연속된 줄바꿈 제거
-        text = re.sub(r'cookie|Cookie|/n', '', text, flags=re.IGNORECASE)  # 'cookie' 및 '/n' 제거
-        text = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
-        return text
+        text_lines = text.splitlines()
+
+        # 제거할 키워드가 포함된 줄 제거
+        keywords_to_remove = ["cookie", "Cookie", "privacy", "Privacy", "terms", "Terms"]
+        cleaned_lines = [
+            line for line in text_lines
+            if not any(keyword.lower() in line.lower() for keyword in keywords_to_remove)
+        ]
+
+        # 남은 줄을 합치고 연속된 줄바꿈을 하나로 치환
+        cleaned_text = "\n".join(cleaned_lines)
+        cleaned_text = re.sub(r'\n+', '\n', cleaned_text)  # 연속된 줄바꿈 제거
+        return cleaned_text
     except Exception as e:
         st.warning(f"텍스트 정리 중 오류 발생: {e}")
         return ""
@@ -186,8 +195,6 @@ if start_crawl and url_input:
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
-                    if download_button:
-                        time.sleep(300)  # 다운로드 버튼 최소 5분 유지
                 except Exception as e:
                     st.error(f"파일 다운로드 중 오류 발생: {e}")
     else:
