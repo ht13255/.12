@@ -2,12 +2,12 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+import re
 import math
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import time
-import re
 
 # SNS 도메인 목록 (제외할 도메인)
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
@@ -15,6 +15,13 @@ SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "
 # 제외할 링크 도메인 및 경로
 EXCLUDED_DOMAINS = ["policies.google.com", "github.com"]
 EXCLUDED_PATHS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
+
+# 제외할 URL 패턴
+EXCLUDED_PATTERNS = [
+    r"https://blog\.google",  # blog.google
+    r"https://optout\.aboutads",  # optout.aboutads
+    r"https://www\.google\.com/intl"  # www.google.com/intl
+]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -52,10 +59,12 @@ def collect_links(base_url):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # 특정 도메인 및 경로 필터링
+                # 도메인, 경로 및 패턴 필터링
                 if any(domain in parsed_href.netloc for domain in SNS_DOMAINS + EXCLUDED_DOMAINS):
                     continue
                 if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_PATHS):
+                    continue
+                if any(re.match(pattern, href) for pattern in EXCLUDED_PATTERNS):
                     continue
 
                 # 중복 제거 후 링크 추가
