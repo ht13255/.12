@@ -2,28 +2,18 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-import re
 import math
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import time
+import re
 
 # SNS 도메인 목록 (제외할 도메인)
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 
-# 제외할 링크 도메인 및 경로
-EXCLUDED_DOMAINS = ["google.com"]
-EXCLUDED_PATHS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
-
-# 제외할 URL 패턴 (정규 표현식으로 Google 관련 URL 필터링)
-EXCLUDED_PATTERNS = [
-    r".*\.google\.com",  # 모든 google.com 하위 도메인
-    r"https://blog\.google",  # blog.google
-    r"https://policies\.google",  # policies.google
-    r"https://www\.google\.com/intl",  # www.google.com/intl
-    r"https://optout\.aboutads"  # optout.aboutads
-]
+# 제외할 링크 키워드
+EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -61,12 +51,10 @@ def collect_links(base_url):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # 도메인, 경로 및 패턴 필터링
-                if any(domain in parsed_href.netloc for domain in SNS_DOMAINS + EXCLUDED_DOMAINS):
+                # SNS 링크 및 제외할 키워드 필터링
+                if any(domain in parsed_href.netloc for domain in SNS_DOMAINS):
                     continue
-                if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_PATHS):
-                    continue
-                if any(re.match(pattern, href) for pattern in EXCLUDED_PATTERNS):
+                if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_KEYWORDS):
                     continue
 
                 # 중복 제거 후 링크 추가
@@ -175,7 +163,7 @@ def is_valid_url(url):
         return False
 
 # Streamlit 앱
-st.title("Google 관련 링크 제외 크롤러 및 학습 데이터 생성기")
+st.title("모든 링크 크롤러 및 학습 데이터 생성기")
 url_input = st.text_input("사이트 URL을 입력하세요", placeholder="https://example.com")
 RESULTS_PER_PAGE = 5
 file_format = st.selectbox("저장할 파일 형식을 선택하세요", ["json", "csv"])
@@ -217,6 +205,7 @@ if start_crawl and url_input:
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
+                    time.sleep(3600)  # 다운로드 버튼 유지 시간: 1시간
                 except Exception as e:
                     st.error(f"파일 다운로드 중 오류 발생: {e}")
     else:
