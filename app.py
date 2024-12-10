@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 import re
 
-# SNS 도메인 목록
+# SNS 도메인 목록 (제외할 도메인)
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 
 # 사용자 에이전트 설정
@@ -17,7 +17,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
-# 링크를 수집하는 함수
+# 링크를 수집하는 함수 (모든 종류의 링크 포함)
 def collect_links(base_url):
     visited = set()
     links_to_visit = [base_url]
@@ -33,37 +33,34 @@ def collect_links(base_url):
             response = requests.get(url, headers=HEADERS, timeout=10)
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
-            else:
-                st.warning(f"링크 수집 중 오류 발생: {url} ({e})")
+            st.warning(f"HTTP 오류: {e} ({url})")
             continue
         except requests.RequestException as e:
-            st.warning(f"링크 수집 중 오류 발생: {url} ({e})")
+            st.warning(f"요청 실패: {e} ({url})")
             continue
 
         try:
             soup = BeautifulSoup(response.text, 'html.parser')
             collected_links.append(url)
 
-            # 내부 링크를 수집
+            # 모든 링크를 수집
             for tag in soup.find_all('a', href=True):
-                href = urljoin(base_url, tag['href'])
+                href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # SNS 링크 필터링
+                # SNS 링크 필터링 (옵션)
                 if any(domain in parsed_href.netloc for domain in SNS_DOMAINS):
                     continue
 
-                if urlparse(base_url).netloc == parsed_href.netloc:  # 같은 도메인만
-                    if href not in visited and href not in links_to_visit:
-                        links_to_visit.append(href)
+                # 중복 제거 후 링크 추가
+                if href not in visited and href not in links_to_visit:
+                    links_to_visit.append(href)
         except Exception as e:
             st.warning(f"HTML 파싱 중 오류 발생: {url} ({e})")
-    
+
     return collected_links
 
-# 요청 재시도 및 오류 처리 포함
+# 요청 및 컨텐츠 가져오기 함수
 def fetch_content(url, retries=3, delay=5, use_proxy=False):
     proxies = {
         "http": "http://your_proxy:port",
@@ -74,7 +71,7 @@ def fetch_content(url, retries=3, delay=5, use_proxy=False):
         try:
             response = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
             response.raise_for_status()
-            time.sleep(1)  # 요청 간 1초 지연
+            time.sleep(1)  # 요청 간 지연
             return response.text
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 404:
@@ -161,7 +158,7 @@ def is_valid_url(url):
         return False
 
 # Streamlit 앱
-st.title("오류 방지 웹 크롤러 및 학습 데이터 생성기")
+st.title("모든 링크 크롤러 및 학습 데이터 생성기")
 url_input = st.text_input("사이트 URL을 입력하세요", placeholder="https://example.com")
 RESULTS_PER_PAGE = 5
 file_format = st.selectbox("저장할 파일 형식을 선택하세요", ["json", "csv"])
