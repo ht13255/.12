@@ -12,12 +12,15 @@ import re
 # SNS 도메인 목록 (제외할 도메인)
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 
+# 제외할 링크 키워드
+EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
+
 # 사용자 에이전트 설정
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
-# 링크를 수집하는 함수 (모든 종류의 링크 포함)
+# 링크를 수집하는 함수
 def collect_links(base_url):
     visited = set()
     links_to_visit = [base_url]
@@ -48,8 +51,10 @@ def collect_links(base_url):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # SNS 링크 필터링 (옵션)
+                # SNS 링크 및 제외할 키워드 필터링
                 if any(domain in parsed_href.netloc for domain in SNS_DOMAINS):
+                    continue
+                if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_KEYWORDS):
                     continue
 
                 # 중복 제거 후 링크 추가
@@ -200,6 +205,7 @@ if start_crawl and url_input:
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
+                    time.sleep(3600)  # 다운로드 버튼 유지 시간: 1시간
                 except Exception as e:
                     st.error(f"파일 다운로드 중 오류 발생: {e}")
     else:
