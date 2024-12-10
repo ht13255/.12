@@ -13,14 +13,16 @@ import time
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 
 # 제외할 링크 도메인 및 경로
-EXCLUDED_DOMAINS = ["policies.google.com", "github.com"]
+EXCLUDED_DOMAINS = ["google.com"]
 EXCLUDED_PATHS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
 
-# 제외할 URL 패턴
+# 제외할 URL 패턴 (정규 표현식으로 Google 관련 URL 필터링)
 EXCLUDED_PATTERNS = [
+    r".*\.google\.com",  # 모든 google.com 하위 도메인
     r"https://blog\.google",  # blog.google
-    r"https://optout\.aboutads",  # optout.aboutads
-    r"https://www\.google\.com/intl"  # www.google.com/intl
+    r"https://policies\.google",  # policies.google
+    r"https://www\.google\.com/intl",  # www.google.com/intl
+    r"https://optout\.aboutads"  # optout.aboutads
 ]
 
 # 사용자 에이전트 설정
@@ -173,7 +175,7 @@ def is_valid_url(url):
         return False
 
 # Streamlit 앱
-st.title("모든 링크 크롤러 및 학습 데이터 생성기")
+st.title("Google 관련 링크 제외 크롤러 및 학습 데이터 생성기")
 url_input = st.text_input("사이트 URL을 입력하세요", placeholder="https://example.com")
 RESULTS_PER_PAGE = 5
 file_format = st.selectbox("저장할 파일 형식을 선택하세요", ["json", "csv"])
