@@ -32,6 +32,12 @@ def collect_links(base_url):
         try:
             response = requests.get(url, headers=HEADERS, timeout=10)
             response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
+            else:
+                st.warning(f"링크 수집 중 오류 발생: {url} ({e})")
+            continue
         except requests.RequestException as e:
             st.warning(f"링크 수집 중 오류 발생: {url} ({e})")
             continue
@@ -57,7 +63,7 @@ def collect_links(base_url):
     
     return collected_links
 
-# 요청 재시도 및 프록시 설정 포함
+# 요청 재시도 및 오류 처리 포함
 def fetch_content(url, retries=3, delay=5, use_proxy=False):
     proxies = {
         "http": "http://your_proxy:port",
@@ -71,7 +77,10 @@ def fetch_content(url, retries=3, delay=5, use_proxy=False):
             time.sleep(1)  # 요청 간 1초 지연
             return response.text
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code in [429, 503]:  # Too Many Requests 또는 Service Unavailable
+            if e.response.status_code == 404:
+                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
+                return f"Error: 404 Not Found ({url})"
+            elif e.response.status_code in [429, 503]:  # Too Many Requests 또는 Service Unavailable
                 if i < retries - 1:
                     time.sleep(delay)  # 딜레이 후 재시도
                 else:
@@ -107,7 +116,6 @@ def crawl_content_multithread(links):
 # 텍스트 정리 함수 (가이드라인 제거)
 def clean_text(text):
     try:
-        # 공백, 불필요한 줄바꿈 제거
         text = text.strip()
         text_lines = text.splitlines()
 
@@ -189,7 +197,7 @@ if start_crawl and url_input:
             if file_path:
                 try:
                     with open(file_path, "rb") as f:
-                        download_button = st.download_button(
+                        st.download_button(
                             label=f"크롤링 결과 다운로드 ({file_format.upper()})",
                             data=f,
                             file_name=file_path,
