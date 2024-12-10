@@ -6,13 +6,12 @@ import math
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
-import time
 import re
+import time
+from datetime import datetime, timedelta
 
-# SNS 도메인 목록 (제외할 도메인)
+# SNS 도메인 및 제외할 키워드
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
-
-# 제외할 링크 키워드
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
 
 # 사용자 에이전트 설정
@@ -25,6 +24,7 @@ def collect_links(base_url):
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
+    failed_links = []  # 수집 실패한 링크 기록
 
     while links_to_visit:
         url = links_to_visit.pop()
@@ -37,9 +37,11 @@ def collect_links(base_url):
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
             st.warning(f"HTTP 오류: {e} ({url})")
+            failed_links.append(url)
             continue
         except requests.RequestException as e:
             st.warning(f"요청 실패: {e} ({url})")
+            failed_links.append(url)
             continue
 
         try:
@@ -63,7 +65,7 @@ def collect_links(base_url):
         except Exception as e:
             st.warning(f"HTML 파싱 중 오류 발생: {url} ({e})")
 
-    return collected_links
+    return collected_links, failed_links
 
 # 요청 및 컨텐츠 가져오기 함수
 def fetch_content(url, retries=3, delay=5, use_proxy=False):
@@ -79,21 +81,15 @@ def fetch_content(url, retries=3, delay=5, use_proxy=False):
             time.sleep(1)  # 요청 간 지연
             return response.text
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
-                return f"Error: 404 Not Found ({url})"
-            elif e.response.status_code in [429, 503]:  # Too Many Requests 또는 Service Unavailable
-                if i < retries - 1:
-                    time.sleep(delay)  # 딜레이 후 재시도
-                else:
-                    return f"Error: HTTP {e.response.status_code} ({e})"
-            else:
-                return f"Error: HTTP {e.response.status_code} ({e})"
+            if e.response.status_code in [404, 429, 503]:
+                st.warning(f"HTTP 오류: {e.response.status_code} ({url})")
+                return f"Error: HTTP {e.response.status_code} ({url})"
         except requests.RequestException as e:
             if i < retries - 1:
                 time.sleep(delay)
             else:
                 return f"Error: Unable to fetch content ({e})"
+    return ""
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
 def crawl_content_multithread(links):
@@ -115,7 +111,7 @@ def crawl_content_multithread(links):
 
     return content_data
 
-# 텍스트 정리 함수 (가이드라인 제거)
+# 텍스트 정리 함수
 def clean_text(text):
     try:
         text = text.strip()
@@ -163,7 +159,7 @@ def is_valid_url(url):
         return False
 
 # Streamlit 앱
-st.title("모든 링크 크롤러 및 학습 데이터 생성기")
+st.title("오류 방지 웹 크롤러 및 학습 데이터 생성기")
 url_input = st.text_input("사이트 URL을 입력하세요", placeholder="https://example.com")
 RESULTS_PER_PAGE = 5
 file_format = st.selectbox("저장할 파일 형식을 선택하세요", ["json", "csv"])
@@ -176,13 +172,14 @@ if start_crawl and url_input:
 
     with st.spinner("링크를 수집 중입니다..."):
         try:
-            links = collect_links(url_input)
+            links, failed_links = collect_links(url_input)
         except Exception as e:
             st.error(f"링크 수집 중 치명적인 오류 발생: {e}")
-            links = []
+            links, failed_links = [], []
 
     if links:
         st.success(f"수집된 링크 수: {len(links)}")
+        st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
         st.write(links)
 
         with st.spinner("내용을 크롤링 중입니다..."):
@@ -197,7 +194,8 @@ if start_crawl and url_input:
             file_path = save_data(content, file_format)
 
             if file_path:
-                try:
+                expire_time = datetime.now() + timedelta(hours=1)
+                while datetime.now() < expire_time:
                     with open(file_path, "rb") as f:
                         st.download_button(
                             label=f"크롤링 결과 다운로드 ({file_format.upper()})",
@@ -205,8 +203,6 @@ if start_crawl and url_input:
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
-                    time.sleep(3600)  # 다운로드 버튼 유지 시간: 1시간
-                except Exception as e:
-                    st.error(f"파일 다운로드 중 오류 발생: {e}")
+                        time.sleep(60)
     else:
         st.error("링크를 수집할 수 없습니다. URL을 확인하세요.")
