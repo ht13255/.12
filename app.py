@@ -1,12 +1,11 @@
 import streamlit as st
+import threading
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from threading import Thread
 from io import BytesIO
-import time
 
 # 제외할 도메인, 키워드 및 파일 확장자
 EXCLUDED_DOMAINS = [
@@ -23,15 +22,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
-# 세션 상태 초기화
-if "task_status" not in st.session_state:
-    st.session_state.task_status = "idle"  # idle, running, completed
-if "collected_data" not in st.session_state:
-    st.session_state.collected_data = None  # 작업 완료된 데이터
-if "error_logs" not in st.session_state:
-    st.session_state.error_logs = []
+# 세션 초기화
+if "is_running" not in st.session_state:
+    st.session_state.is_running = False
+if "result_data" not in st.session_state:
+    st.session_state.result_data = None
 
-# 링크 수집 함수
+# 링크를 수집하는 함수
 def collect_links(base_url, exclude_external=False):
     base_domain = urlparse(base_url).netloc
     visited = set()
@@ -76,64 +73,88 @@ def collect_links(base_url, exclude_external=False):
             failed_links.append(url)
     return collected_links, failed_links
 
-# 데이터 저장 함수
-def save_data_to_memory(data, file_format):
-    buffer = BytesIO()
-    if file_format == "json":
-        json.dump(data, buffer, ensure_ascii=False, indent=4)
-        mime_type = "application/json"
-    elif file_format == "csv":
-        df = pd.DataFrame(data)
-        df.to_csv(buffer, index=False, encoding="utf-8")
-        mime_type = "text/csv"
-    buffer.seek(0)
-    return buffer, mime_type
-
-# 백그라운드 작업 함수
-def run_crawling_task(base_url, exclude_external, max_threads):
-    st.session_state.task_status = "running"
+# 요청 및 컨텐츠 가져오기 함수
+def fetch_content(url):
     try:
-        collected_links, failed_links = collect_links(base_url, exclude_external)
-        st.session_state.collected_data = {"links": collected_links, "failed": failed_links}
-        st.session_state.task_status = "completed"
-    except Exception as e:
-        st.session_state.error_logs.append(str(e))
-        st.session_state.task_status = "idle"
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        return response.text
+    except requests.RequestException:
+        return None
+
+# 멀티스레드 크롤링 함수
+def crawl_content_multithread(links):
+    content_data = []
+
+    def fetch_and_parse_content(link):
+        html = fetch_content(link)
+        if html:
+            try:
+                soup = BeautifulSoup(html, 'html.parser')
+                text = soup.get_text(separator="\n").strip()
+                return {"url": link, "content": text}
+            except Exception:
+                return {"url": link, "content": "Error parsing content"}
+        else:
+            return {"url": link, "content": "Error fetching content"}
+
+    content_data = [fetch_and_parse_content(link) for link in links]
+    return content_data
+
+# 백그라운드에서 실행될 함수
+def background_task(url, exclude_external, max_threads):
+    st.session_state.is_running = True
+    links, failed_links = collect_links(url, exclude_external)
+    if links:
+        result = crawl_content_multithread(links)
+        st.session_state.result_data = result
+    else:
+        st.session_state.result_data = []
+    st.session_state.is_running = False
 
 # UI
 st.title("크롤링 사이트")
-st.markdown("**백그라운드에서 안전하게 크롤링 작업을 수행합니다.**")
+st.markdown("**백그라운드에서 작업을 계속 실행하고 결과를 다운로드하세요.**")
 
-# 입력 UI
-url_input = st.text_input("크롤링할 URL", placeholder="https://example.com")
+url_input = st.text_input("크롤링할 사이트 URL", placeholder="https://example.com")
 exclude_external = st.checkbox("외부 링크 제외", value=False)
-max_threads = st.slider("멀티스레드 개수 (최대 100)", 5, 100, 20, step=1)
-file_format = st.selectbox("저장할 파일 형식", ["json", "csv"])
+max_threads = st.slider("스레드 개수 설정 (최대 100)", min_value=5, max_value=100, value=20, step=1)
+start_crawl = st.button("크롤링 시작")
+
+# 크롤링 시작 버튼을 누르면 백그라운드에서 실행
+if start_crawl and url_input:
+    if not st.session_state.is_running:
+        thread = threading.Thread(target=background_task, args=(url_input, exclude_external, max_threads))
+        thread.start()
+        st.success("크롤링 작업이 시작되었습니다. 결과가 준비될 때까지 기다려주세요.")
+    else:
+        st.warning("이미 작업이 실행 중입니다. 완료를 기다려주세요.")
 
 # 작업 상태 표시
-if st.session_state.task_status == "idle":
-    st.info("작업 대기 중")
-elif st.session_state.task_status == "running":
-    st.warning("작업 진행 중... 창을 닫아도 작업은 계속됩니다.")
-elif st.session_state.task_status == "completed":
-    st.success("작업 완료! 데이터를 다운로드하세요.")
+if st.session_state.is_running:
+    st.info("작업이 실행 중입니다. 잠시만 기다려주세요...")
+elif st.session_state.result_data is not None:
+    st.success("작업이 완료되었습니다! 데이터를 다운로드하세요.")
+    file_format = st.selectbox("저장할 파일 형식 선택", ["json", "csv"])
 
-# 작업 시작 버튼
-if st.button("작업 시작"):
-    if not url_input:
-        st.error("크롤링할 URL을 입력하세요.")
-    elif st.session_state.task_status == "running":
-        st.warning("이미 작업이 진행 중입니다.")
-    else:
-        thread = Thread(target=run_crawling_task, args=(url_input, exclude_external, max_threads), daemon=True)
-        thread.start()
-
-# 작업 결과 다운로드
-if st.session_state.task_status == "completed" and st.session_state.collected_data:
-    memory_buffer, mime_type = save_data_to_memory(st.session_state.collected_data, file_format)
-    st.download_button(
-        label=f"결과 다운로드 ({file_format.upper()})",
-        data=memory_buffer,
-        file_name=f"crawled_content.{file_format}",
-        mime=mime_type
-    )
+    # 결과 데이터 다운로드 버튼
+    buffer = BytesIO()
+    if file_format == "json":
+        json.dump(st.session_state.result_data, buffer, ensure_ascii=False, indent=4)
+        buffer.seek(0)
+        st.download_button(
+            label="JSON 파일 다운로드",
+            data=buffer,
+            file_name="crawled_content.json",
+            mime="application/json"
+        )
+    elif file_format == "csv":
+        df = pd.DataFrame(st.session_state.result_data)
+        df.to_csv(buffer, index=False, encoding="utf-8")
+        buffer.seek(0)
+        st.download_button(
+            label="CSV 파일 다운로드",
+            data=buffer,
+            file_name="crawled_content.csv",
+            mime="text/csv"
+        )
