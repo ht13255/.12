@@ -2,17 +2,18 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-import math
+import re
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
-import re
 import time
 from datetime import datetime, timedelta
 
 # SNS 도메인 및 제외할 키워드
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
+GOOGLE_DOMAINS = ["google.com"]
+EXCLUDED_FILE_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".zip", ".rar", ".tar", ".gz"]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -20,7 +21,8 @@ HEADERS = {
 }
 
 # 링크를 수집하는 함수
-def collect_links(base_url):
+def collect_links(base_url, exclude_external=False):
+    base_domain = urlparse(base_url).netloc
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
@@ -53,9 +55,23 @@ def collect_links(base_url):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # SNS 링크 및 제외할 키워드 필터링
-                if any(domain in parsed_href.netloc for domain in SNS_DOMAINS):
+                # Google, SNS 링크 및 제외할 키워드 필터링
+                if any(domain in parsed_href.netloc for domain in GOOGLE_DOMAINS + SNS_DOMAINS):
                     continue
+
+                # 외부 링크 제외 옵션
+                if exclude_external and parsed_href.netloc != base_domain:
+                    continue
+
+                # 이메일 주소 및 파일 링크 필터링
+                if href.startswith("mailto:") or any(href.endswith(ext) for ext in EXCLUDED_FILE_EXTENSIONS):
+                    continue
+
+                # URL 유효성 검사 (http/https로 시작하지 않으면 제외)
+                if not parsed_href.scheme in ["http", "https"]:
+                    continue
+
+                # 제외 키워드 필터링
                 if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_KEYWORDS):
                     continue
 
@@ -159,10 +175,11 @@ def is_valid_url(url):
         return False
 
 # Streamlit 앱
-st.title("오류 방지 웹 크롤러 및 학습 데이터 생성기")
-url_input = st.text_input("사이트 URL을 입력하세요", placeholder="https://example.com")
-RESULTS_PER_PAGE = 5
-file_format = st.selectbox("저장할 파일 형식을 선택하세요", ["json", "csv"])
+st.title("크롤링 사이트")
+st.sidebar.title("옵션 설정")
+url_input = st.text_input("크롤링할 사이트 URL을 입력하세요", placeholder="https://example.com")
+exclude_external = st.sidebar.checkbox("외부 링크 제외", value=False)
+file_format = st.sidebar.selectbox("저장할 파일 형식 선택", ["json", "csv"])
 start_crawl = st.button("크롤링 시작")
 
 if start_crawl and url_input:
@@ -172,7 +189,7 @@ if start_crawl and url_input:
 
     with st.spinner("링크를 수집 중입니다..."):
         try:
-            links, failed_links = collect_links(url_input)
+            links, failed_links = collect_links(url_input, exclude_external)
         except Exception as e:
             st.error(f"링크 수집 중 치명적인 오류 발생: {e}")
             links, failed_links = [], []
