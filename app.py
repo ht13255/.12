@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import time
 from datetime import datetime, timedelta
 
-# 제외할 도메인 및 키워드
+# 제외할 도메인, 키워드 및 파일 확장자
 EXCLUDED_DOMAINS = [
     "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com",
     "whatsapp.com", "telegram.org", "messenger.com", "pinterest.com", "reddit.com",
@@ -17,6 +17,7 @@ EXCLUDED_DOMAINS = [
 ]
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
 EXCLUDED_FILE_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".zip", ".rar", ".tar", ".gz"]
+EXCLUDED_IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".svg"]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -58,7 +59,7 @@ def collect_links(base_url, exclude_external=False):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # 제외할 도메인 및 키워드 필터링
+                # 제외할 도메인, 이미지 링크 및 키워드 필터링
                 if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
                     continue
 
@@ -66,8 +67,8 @@ def collect_links(base_url, exclude_external=False):
                 if exclude_external and parsed_href.netloc != base_domain:
                     continue
 
-                # 이메일 주소 및 파일 링크 필터링
-                if href.startswith("mailto:") or any(href.endswith(ext) for ext in EXCLUDED_FILE_EXTENSIONS):
+                # 이메일 주소, 파일 링크 및 이미지 링크 필터링
+                if href.startswith("mailto:") or any(href.endswith(ext) for ext in EXCLUDED_FILE_EXTENSIONS + EXCLUDED_IMAGE_EXTENSIONS):
                     continue
 
                 # URL 유효성 검사 (http/https로 시작하지 않으면 제외)
