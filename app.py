@@ -10,11 +10,13 @@ import time
 from datetime import datetime, timedelta
 
 # 제외할 도메인 및 키워드
-SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
+EXCLUDED_DOMAINS = [
+    "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com",
+    "whatsapp.com", "telegram.org", "messenger.com", "pinterest.com", "reddit.com",
+    "youtube.com", "snapchat.com", "weibo.com", "wechat.com", "line.me"
+]
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
-GOOGLE_DOMAINS = ["google.com"]
 EXCLUDED_FILE_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".zip", ".rar", ".tar", ".gz"]
-EXCLUDED_PLATFORMS = ["whatsapp.com", "telegram.org", "messenger.com"]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -56,8 +58,8 @@ def collect_links(base_url, exclude_external=False):
                 href = urljoin(url, tag['href'])  # 절대 경로로 변환
                 parsed_href = urlparse(href)
 
-                # Google, SNS, 특정 플랫폼 및 제외할 키워드 필터링
-                if any(domain in parsed_href.netloc for domain in GOOGLE_DOMAINS + SNS_DOMAINS + EXCLUDED_PLATFORMS):
+                # 제외할 도메인 및 키워드 필터링
+                if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
                     continue
 
                 # 외부 링크 제외 옵션
