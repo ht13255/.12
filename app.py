@@ -1,119 +1,90 @@
 import streamlit as st
-import requests
+import aiohttp
+import asyncio
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-import re
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
 import time
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
-# SNS 도메인 및 제외할 키워드
+# 설정
 SNS_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register"]
 GOOGLE_DOMAINS = ["google.com"]
 EXCLUDED_FILE_EXTENSIONS = [".pdf", ".docx", ".xlsx", ".zip", ".rar", ".tar", ".gz"]
-
-# 사용자 에이전트 설정
+EXCLUDED_PLATFORMS = ["whatsapp.com", "telegram.org", "messenger.com"]
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
+# 비동기 요청 (링크 수집 및 컨텐츠 다운로드)
+async def fetch(session, url):
+    try:
+        async with session.get(url, timeout=10) as response:
+            response.raise_for_status()
+            return await response.text()
+    except Exception as e:
+        return f"Error fetching {url}: {e}"
+
 # 링크를 수집하는 함수
-def collect_links(base_url, exclude_external=False):
+async def collect_links(base_url, exclude_external=False):
     base_domain = urlparse(base_url).netloc
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
-    failed_links = []  # 수집 실패한 링크 기록
+    failed_links = []
 
-    while links_to_visit:
-        url = links_to_visit.pop()
-        if url in visited:
-            continue
-        visited.add(url)
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
+        while links_to_visit:
+            url = links_to_visit.pop()
+            if url in visited:
+                continue
+            visited.add(url)
 
-        try:
-            response = requests.get(url, headers=HEADERS, timeout=10)
-            response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"HTTP 오류: {e} ({url})")
-            failed_links.append(url)
-            continue
-        except requests.RequestException as e:
-            st.warning(f"요청 실패: {e} ({url})")
-            failed_links.append(url)
-            continue
-
-        try:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            collected_links.append(url)
-
-            # 모든 링크를 수집
-            for tag in soup.find_all('a', href=True):
-                href = urljoin(url, tag['href'])  # 절대 경로로 변환
-                parsed_href = urlparse(href)
-
-                # Google, SNS 링크 및 제외할 키워드 필터링
-                if any(domain in parsed_href.netloc for domain in GOOGLE_DOMAINS + SNS_DOMAINS):
+            try:
+                html = await fetch(session, url)
+                if "Error fetching" in html:
+                    failed_links.append(url)
                     continue
 
-                # 외부 링크 제외 옵션
-                if exclude_external and parsed_href.netloc != base_domain:
-                    continue
+                soup = BeautifulSoup(html, 'html.parser')
+                collected_links.append(url)
 
-                # 이메일 주소 및 파일 링크 필터링
-                if href.startswith("mailto:") or any(href.endswith(ext) for ext in EXCLUDED_FILE_EXTENSIONS):
-                    continue
+                for tag in soup.find_all('a', href=True):
+                    href = urljoin(url, tag['href'])
+                    parsed_href = urlparse(href)
 
-                # URL 유효성 검사 (http/https로 시작하지 않으면 제외)
-                if not parsed_href.scheme in ["http", "https"]:
-                    continue
-
-                # 제외 키워드 필터링
-                if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_KEYWORDS):
-                    continue
-
-                # 중복 제거 후 링크 추가
-                if href not in visited and href not in links_to_visit:
-                    links_to_visit.append(href)
-        except Exception as e:
-            st.warning(f"HTML 파싱 중 오류 발생: {url} ({e})")
+                    # 필터링: Google, SNS, 제외 플랫폼, 파일, 외부 링크
+                    if any(domain in parsed_href.netloc for domain in GOOGLE_DOMAINS + SNS_DOMAINS + EXCLUDED_PLATFORMS):
+                        continue
+                    if href.startswith("mailto:") or any(href.endswith(ext) for ext in EXCLUDED_FILE_EXTENSIONS):
+                        continue
+                    if exclude_external and parsed_href.netloc != base_domain:
+                        continue
+                    if not parsed_href.scheme in ["http", "https"]:
+                        continue
+                    if any(keyword in parsed_href.path.lower() for keyword in EXCLUDED_KEYWORDS):
+                        continue
+                    if href not in visited and href not in links_to_visit:
+                        links_to_visit.append(href)
+            except Exception as e:
+                failed_links.append(url)
+                continue
 
     return collected_links, failed_links
 
-# 요청 및 컨텐츠 가져오기 함수
-def fetch_content(url, retries=3, delay=5, use_proxy=False):
-    proxies = {
-        "http": "http://your_proxy:port",
-        "https": "https://your_proxy:port"
-    } if use_proxy else None
-
-    for i in range(retries):
-        try:
-            response = requests.get(url, headers=HEADERS, proxies=proxies, timeout=10)
-            response.raise_for_status()
-            time.sleep(1)  # 요청 간 지연
-            return response.text
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code in [404, 429, 503]:
-                st.warning(f"HTTP 오류: {e.response.status_code} ({url})")
-                return f"Error: HTTP {e.response.status_code} ({url})"
-        except requests.RequestException as e:
-            if i < retries - 1:
-                time.sleep(delay)
-            else:
-                return f"Error: Unable to fetch content ({e})"
-    return ""
-
-# 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links):
+# 비동기 컨텐츠 다운로드
+async def crawl_content(links):
     content_data = []
 
-    def fetch_and_parse_content(link):
-        html = fetch_content(link, retries=3, delay=5, use_proxy=False)
+    async def fetch_and_parse_content(session, link):
         try:
+            html = await fetch(session, link)
+            if "Error fetching" in html:
+                return {"url": link, "content": f"Error fetching content: {html}"}
+
             soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text(separator="\n")
             text = clean_text(text)
@@ -121,9 +92,9 @@ def crawl_content_multithread(links):
         except Exception as e:
             return {"url": link, "content": f"Error parsing content: {e}"}
 
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        results = list(executor.map(fetch_and_parse_content, links))
-        content_data.extend(results)
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
+        tasks = [fetch_and_parse_content(session, link) for link in links]
+        content_data = await asyncio.gather(*tasks)
 
     return content_data
 
@@ -133,22 +104,17 @@ def clean_text(text):
         text = text.strip()
         text_lines = text.splitlines()
 
-        # 제거할 키워드가 포함된 줄 제거
         keywords_to_remove = ["cookie", "Cookie", "privacy", "Privacy", "terms", "Terms"]
         cleaned_lines = [
             line for line in text_lines
             if not any(keyword.lower() in line.lower() for keyword in keywords_to_remove)
         ]
-
-        # 남은 줄을 합치고 연속된 줄바꿈을 하나로 치환
         cleaned_text = "\n".join(cleaned_lines)
-        cleaned_text = re.sub(r'\n+', '\n', cleaned_text)  # 연속된 줄바꿈 제거
         return cleaned_text
     except Exception as e:
-        st.warning(f"텍스트 정리 중 오류 발생: {e}")
-        return ""
+        return f"Error cleaning text: {e}"
 
-# 데이터 저장 함수 (JSON 및 CSV)
+# 데이터 저장 함수
 def save_data(data, file_format):
     try:
         if file_format == "json":
@@ -165,14 +131,10 @@ def save_data(data, file_format):
         st.error(f"데이터 저장 중 오류 발생: {e}")
     return None
 
-# URL 유효성 검사 함수
+# URL 유효성 검사
 def is_valid_url(url):
-    try:
-        parsed = urlparse(url)
-        return bool(parsed.netloc) and bool(parsed.scheme)
-    except Exception as e:
-        st.error(f"URL 유효성 검사 중 오류 발생: {e}")
-        return False
+    parsed = urlparse(url)
+    return bool(parsed.netloc) and bool(parsed.scheme)
 
 # Streamlit 앱
 st.title("크롤링 사이트")
@@ -188,27 +150,19 @@ if start_crawl and url_input:
         st.stop()
 
     with st.spinner("링크를 수집 중입니다..."):
-        try:
-            links, failed_links = collect_links(url_input, exclude_external)
-        except Exception as e:
-            st.error(f"링크 수집 중 치명적인 오류 발생: {e}")
-            links, failed_links = [], []
+        collected_links, failed_links = asyncio.run(collect_links(url_input, exclude_external))
 
-    if links:
-        st.success(f"수집된 링크 수: {len(links)}")
+    if collected_links:
+        st.success(f"수집된 링크 수: {len(collected_links)}")
         st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
-        st.write(links)
+        st.write(collected_links)
 
         with st.spinner("내용을 크롤링 중입니다..."):
-            try:
-                content = crawl_content_multithread(links)
-            except Exception as e:
-                st.error(f"크롤링 중 치명적인 오류 발생: {e}")
-                content = []
+            content_data = asyncio.run(crawl_content(collected_links))
 
-        if content:
+        if content_data:
             st.success("크롤링 완료! 학습용 데이터를 저장합니다.")
-            file_path = save_data(content, file_format)
+            file_path = save_data(content_data, file_format)
 
             if file_path:
                 expire_time = datetime.now() + timedelta(hours=1)
