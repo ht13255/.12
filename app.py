@@ -29,30 +29,41 @@ def is_valid_url(url):
 def collect_links(base_url):
     try:
         visited = set()
+        failed_links = set()
         links_to_visit = [base_url]
         collected_links = []
 
         while links_to_visit:
             url = links_to_visit.pop()
-            if url in visited:
+            if url in visited or url in failed_links:
                 continue
             visited.add(url)
 
-            response = requests.get(url, headers=HEADERS, timeout=10)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, 'html.parser')
-            collected_links.append(url)
+            try:
+                response = requests.get(url, headers=HEADERS, timeout=10)
+                response.raise_for_status()
+                soup = BeautifulSoup(response.text, 'html.parser')
+                collected_links.append(url)
 
-            for tag in soup.find_all('a', href=True):
-                href = urljoin(base_url, tag['href'])
-                if urlparse(href).netloc == urlparse(base_url).netloc:
-                    if href not in visited and href not in links_to_visit:
-                        links_to_visit.append(href)
+                for tag in soup.find_all('a', href=True):
+                    href = urljoin(base_url, tag['href'])
+                    if urlparse(href).netloc == urlparse(base_url).netloc:
+                        if href not in visited and href not in links_to_visit and href not in failed_links:
+                            links_to_visit.append(href)
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 404:
+                    st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
+                else:
+                    st.warning(f"HTTP 오류: {e} ({url})")
+                failed_links.add(url)
+            except requests.RequestException as e:
+                st.warning(f"요청 실패: {e} ({url})")
+                failed_links.add(url)
 
-        return collected_links
+        return collected_links, list(failed_links)
     except Exception as e:
         st.error(f"링크 수집 중 오류 발생: {e}")
-        return []
+        return [], []
 
 # 크롤링 작업 수행
 def fetch_content(link):
@@ -61,6 +72,10 @@ def fetch_content(link):
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         return {"url": link, "content": soup.get_text(separator="\n").strip()}
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            return {"url": link, "content": "Error: 404 Not Found"}
+        return {"url": link, "content": f"HTTP Error: {e}"}
     except Exception as e:
         return {"url": link, "content": f"Error fetching content: {e}"}
 
@@ -109,10 +124,11 @@ if start_crawl and url_input:
         st.error("유효한 URL을 입력하세요.")
     else:
         with st.spinner("링크 수집 중..."):
-            links = collect_links(url_input)
+            links, failed_links = collect_links(url_input)
 
         if links:
             st.success(f"수집된 링크 수: {len(links)}")
+            st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
 
             with st.spinner("내용 크롤링 중..."):
                 content = crawl_content(links)
@@ -134,4 +150,3 @@ if start_crawl and url_input:
                 st.error("크롤링된 내용이 없습니다.")
         else:
             st.error("링크를 수집할 수 없습니다.")
-
