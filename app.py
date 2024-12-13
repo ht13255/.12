@@ -10,15 +10,14 @@ import re
 import time
 from datetime import datetime, timedelta
 
-# SNS 및 외부 링크 도메인
+# SNS, 외부 링크 및 도박 관련 도메인/키워드
 EXCLUDED_DOMAINS = [
     "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com", 
     "google.com", "whatsapp.com", "youtube.com", "pinterest.com"
 ]
-# 파일 확장자 목록
 EXCLUDED_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".svg", ".zip", ".tar.gz"]
-# 제외할 키워드
 EXCLUDED_KEYWORDS = ["login", "signin", "signup", "auth", "oauth", "account", "register", "mailto:"]
+EXCLUDED_GAMBLING_KEYWORDS = ["casino", "bet", "gamble", "poker", "bingo", "lottery", "jackpot", "slots"]
 
 # 사용자 에이전트 설정
 HEADERS = {
@@ -26,7 +25,7 @@ HEADERS = {
 }
 
 # 최대 스레드 수 계산
-MAX_THREADS = max(5, multiprocessing.cpu_count() * 5)  # 최소 5, CPU 코어 수에 따라 동적 설정
+MAX_THREADS = max(5, multiprocessing.cpu_count() * 5)
 
 # 링크 필터링 함수
 def should_exclude_link(href, base_domain):
@@ -41,8 +40,12 @@ def should_exclude_link(href, base_domain):
         if any(href.lower().endswith(ext) for ext in EXCLUDED_EXTENSIONS):
             return True
 
-        # 메일 주소 및 키워드 필터링
+        # 메일 주소 및 일반 키워드 필터링
         if any(keyword in href.lower() for keyword in EXCLUDED_KEYWORDS):
+            return True
+
+        # 도박 관련 키워드 필터링
+        if any(keyword in parsed_href.netloc.lower() or keyword in parsed_href.path.lower() for keyword in EXCLUDED_GAMBLING_KEYWORDS):
             return True
 
         return False
@@ -54,26 +57,22 @@ def should_exclude_link(href, base_domain):
 def collect_links(base_url, exclude_external=False):
     base_domain = urlparse(base_url).netloc
     visited = set()
+    failed_links = set()  # 수집 실패한 링크 기록
     links_to_visit = [base_url]
     collected_links = []
-    failed_links = []  # 수집 실패한 링크 기록
 
     while links_to_visit:
         url = links_to_visit.pop()
-        if url in visited:
+        if url in visited or url in failed_links:
             continue
         visited.add(url)
 
         try:
             response = requests.get(url, headers=HEADERS, timeout=10)
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"HTTP 오류: {e} ({url})")
-            failed_links.append(url)
-            continue
         except requests.RequestException as e:
             st.warning(f"요청 실패: {e} ({url})")
-            failed_links.append(url)
+            failed_links.add(url)
             continue
 
         try:
@@ -86,13 +85,14 @@ def collect_links(base_url, exclude_external=False):
                 if should_exclude_link(href, base_domain):
                     continue
 
-                # 중복 제거 후 링크 추가
-                if href not in visited and href not in links_to_visit:
+                # 중복 및 실패한 링크 제외
+                if href not in visited and href not in links_to_visit and href not in failed_links:
                     links_to_visit.append(href)
         except Exception as e:
             st.warning(f"HTML 파싱 중 오류 발생: {url} ({e})")
+            failed_links.add(url)
 
-    return collected_links, failed_links
+    return collected_links, list(failed_links)
 
 # 요청 및 컨텐츠 가져오기 함수
 def fetch_content(url, retries=3, delay=5, use_proxy=False):
@@ -107,15 +107,11 @@ def fetch_content(url, retries=3, delay=5, use_proxy=False):
             response.raise_for_status()
             time.sleep(1)  # 요청 간 지연
             return response.text
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code in [404, 429, 503]:
-                st.warning(f"HTTP 오류: {e.response.status_code} ({url})")
-                return f"Error: HTTP {e.response.status_code} ({url})"
         except requests.RequestException as e:
             if i < retries - 1:
                 time.sleep(delay)
             else:
-                return f"Error: Unable to fetch content ({e})"
+                st.warning(f"요청 실패: {e} ({url})")
     return ""
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
