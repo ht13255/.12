@@ -26,6 +26,17 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36"
 }
 
+# URL 유효성 검사 함수
+def is_valid_url(url):
+    try:
+        if not url:  # URL이 None 또는 빈 문자열인 경우
+            return False
+        parsed = urlparse(url)
+        return bool(parsed.netloc) and bool(parsed.scheme)
+    except Exception as e:
+        st.warning(f"URL 유효성 검사 중 오류 발생: {e}")
+        return False
+
 # 링크를 수집하는 함수
 def collect_links(base_url, exclude_external=False):
     base_domain = urlparse(base_url).netloc
@@ -88,11 +99,7 @@ def fetch_content(url, retries=3, delay=5):
             response.raise_for_status()
             time.sleep(1)  # 요청 간 지연
             return response.text
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 404:
-                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
-                return f"Error: 404 Not Found ({url})"
-        except requests.RequestException as e:
+        except requests.exceptions.RequestException as e:
             if i < retries - 1:
                 time.sleep(delay)
             else:
