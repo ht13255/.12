@@ -4,9 +4,9 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
+import os
 
 # 제외할 도메인, 키워드 및 파일 확장자
 EXCLUDED_DOMAINS = [
@@ -71,42 +71,44 @@ def collect_links(base_url, exclude_external=False):
     return collected_links, failed_links
 
 # 요청 및 컨텐츠 가져오기 함수
-def fetch_content(url, session):
-    try:
-        response = session.get(url, timeout=10)
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException:
-        return None
+def fetch_content(url, session, retries=3):
+    for _ in range(retries):
+        try:
+            response = session.get(url, timeout=10)
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException:
+            continue
+    return None
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links, max_threads=20, progress_bar=None):
+def crawl_content_multithread(links, max_threads=100, progress_bar=None):
     content_data = []
 
-    def fetch_and_parse_content(link, idx, total, session, progress_bar=None):
-        try:
-            html = fetch_content(link, session)
-            if html:
+    def fetch_and_parse_content(link, session):
+        html = fetch_content(link, session)
+        if html:
+            try:
                 soup = BeautifulSoup(html, 'html.parser')
                 text = soup.get_text(separator="\n").strip()
                 return {"url": link, "content": text}
-            else:
-                return {"url": link, "content": "Error fetching content"}
-        except Exception as e:
-            return {"url": link, "content": f"Error parsing content: {e}"}
-        finally:
-            if progress_bar:
-                progress_bar.progress((idx + 1) / total)
+            except Exception:
+                return {"url": link, "content": "Error parsing content"}
+        else:
+            return {"url": link, "content": "Error fetching content"}
 
     total_links = len(links)
     with requests.Session() as session:
         session.headers.update(HEADERS)
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            results = executor.map(
-                lambda idx_link: fetch_and_parse_content(idx_link[1], idx_link[0], total_links, session, progress_bar),
-                enumerate(links)
-            )
-            content_data.extend(results)
+            futures = {executor.submit(fetch_and_parse_content, link, session): link for link in links}
+            for idx, future in enumerate(as_completed(futures)):
+                try:
+                    content_data.append(future.result())
+                except Exception as e:
+                    content_data.append({"url": futures[future], "content": f"Error: {e}"})
+                if progress_bar:
+                    progress_bar.progress((idx + 1) / total_links)
 
     return content_data
 
@@ -143,7 +145,7 @@ with st.sidebar:
     st.header("옵션 설정")
     url_input = st.text_input("크롤링할 사이트 URL", placeholder="https://example.com")
     exclude_external = st.checkbox("외부 링크 제외", value=False)
-    max_threads = st.slider("스레드 개수 설정 (최대 100)", min_value=5, max_value=100, value=20, step=1)
+    max_threads = st.slider("스레드 개수 설정 (최대 500)", min_value=5, max_value=500, value=os.cpu_count() * 2, step=1)
     file_format = st.selectbox("저장할 파일 형식 선택", ["json", "csv"])
     start_crawl = st.button("크롤링 시작")
 
