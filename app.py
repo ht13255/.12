@@ -7,7 +7,6 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
 import time
 from io import BytesIO
-import os
 
 # 제외할 도메인, 키워드 및 파일 확장자
 EXCLUDED_DOMAINS = [
@@ -84,17 +83,17 @@ def fetch_content(url, session):
 def crawl_content_multithread(links, max_threads=20, progress_bar=None):
     content_data = []
 
-    def fetch_and_parse_content(link, idx, total, session):
-        html = fetch_content(link, session)
-        if html:
-            try:
+    def fetch_and_parse_content(link, idx, total, session, progress_bar=None):
+        try:
+            html = fetch_content(link, session)
+            if html:
                 soup = BeautifulSoup(html, 'html.parser')
                 text = soup.get_text(separator="\n").strip()
                 return {"url": link, "content": text}
-            except Exception:
-                return {"url": link, "content": "Error parsing content"}
-        else:
-            return {"url": link, "content": "Error fetching content"}
+            else:
+                return {"url": link, "content": "Error fetching content"}
+        except Exception as e:
+            return {"url": link, "content": f"Error parsing content: {e}"}
         finally:
             if progress_bar:
                 progress_bar.progress((idx + 1) / total)
@@ -103,8 +102,12 @@ def crawl_content_multithread(links, max_threads=20, progress_bar=None):
     with requests.Session() as session:
         session.headers.update(HEADERS)
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            for idx, link in enumerate(links):
-                content_data.append(fetch_and_parse_content(link, idx, total_links, session))
+            results = executor.map(
+                lambda idx_link: fetch_and_parse_content(idx_link[1], idx_link[0], total_links, session, progress_bar),
+                enumerate(links)
+            )
+            content_data.extend(results)
+
     return content_data
 
 # 데이터 저장 함수 (JSON 및 CSV)
@@ -140,7 +143,7 @@ with st.sidebar:
     st.header("옵션 설정")
     url_input = st.text_input("크롤링할 사이트 URL", placeholder="https://example.com")
     exclude_external = st.checkbox("외부 링크 제외", value=False)
-    max_threads = st.slider("스레드 개수 설정 (최대 100)", min_value=5, max_value=100, value=os.cpu_count() * 2, step=1)
+    max_threads = st.slider("스레드 개수 설정 (최대 100)", min_value=5, max_value=100, value=20, step=1)
     file_format = st.selectbox("저장할 파일 형식 선택", ["json", "csv"])
     start_crawl = st.button("크롤링 시작")
 
