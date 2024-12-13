@@ -44,7 +44,8 @@ def collect_links(base_url, exclude_external=False):
             response = requests.get(url, headers=HEADERS, timeout=10)
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:
-            st.warning(f"HTTP 오류: {e} ({url})")
+            if e.response.status_code == 404:
+                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
             failed_links.append(url)
             continue
         except requests.RequestException as e:
@@ -87,7 +88,11 @@ def fetch_content(url, retries=3, delay=5):
             response.raise_for_status()
             time.sleep(1)  # 요청 간 지연
             return response.text
-        except requests.exceptions.RequestException as e:
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 404:
+                st.warning(f"404 오류: URL을 찾을 수 없습니다. ({url})")
+                return f"Error: 404 Not Found ({url})"
+        except requests.RequestException as e:
             if i < retries - 1:
                 time.sleep(delay)
             else:
@@ -152,15 +157,6 @@ def save_data(data, file_format):
     except Exception as e:
         st.error(f"데이터 저장 중 오류 발생: {e}")
     return None
-
-# URL 유효성 검사 함수
-def is_valid_url(url):
-    try:
-        parsed = urlparse(url)
-        return bool(parsed.netloc) and bool(parsed.scheme)
-    except Exception as e:
-        st.error(f"URL 유효성 검사 중 오류 발생: {e}")
-        return False
 
 # Streamlit 앱
 st.title("크롤링 사이트")
