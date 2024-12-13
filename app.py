@@ -2,7 +2,6 @@ import streamlit as st
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-import math
 import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor
@@ -27,25 +26,29 @@ HEADERS = {
 }
 
 # 최대 스레드 수 계산
-MAX_THREADS = multiprocessing.cpu_count() * 5  # CPU 코어 수에 따라 스레드 수 동적 설정
+MAX_THREADS = max(5, multiprocessing.cpu_count() * 5)  # 최소 5, CPU 코어 수에 따라 동적 설정
 
 # 링크 필터링 함수
 def should_exclude_link(href, base_domain):
-    parsed_href = urlparse(href)
+    try:
+        parsed_href = urlparse(href)
 
-    # 외부 도메인 필터링
-    if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
+        # 외부 도메인 필터링
+        if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
+            return True
+
+        # 파일 경로 필터링
+        if any(href.lower().endswith(ext) for ext in EXCLUDED_EXTENSIONS):
+            return True
+
+        # 메일 주소 및 키워드 필터링
+        if any(keyword in href.lower() for keyword in EXCLUDED_KEYWORDS):
+            return True
+
+        return False
+    except Exception as e:
+        st.warning(f"링크 필터링 중 오류 발생: {e}")
         return True
-
-    # 파일 경로 필터링
-    if any(href.lower().endswith(ext) for ext in EXCLUDED_EXTENSIONS):
-        return True
-
-    # 메일 주소 및 키워드 필터링
-    if any(keyword in href.lower() for keyword in EXCLUDED_KEYWORDS):
-        return True
-
-    return False
 
 # 링크를 수집하는 함수
 def collect_links(base_url, exclude_external=False):
@@ -120,8 +123,11 @@ def crawl_content_multithread(links):
     content_data = []
 
     def fetch_and_parse_content(link):
-        html = fetch_content(link, retries=3, delay=5, use_proxy=False)
         try:
+            html = fetch_content(link, retries=3, delay=5, use_proxy=False)
+            if not html:
+                return {"url": link, "content": "Error: No content retrieved"}
+
             soup = BeautifulSoup(html, 'html.parser')
             text = soup.get_text(separator="\n")
             text = clean_text(text)
@@ -129,9 +135,12 @@ def crawl_content_multithread(links):
         except Exception as e:
             return {"url": link, "content": f"Error parsing content: {e}"}
 
-    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
-        results = list(executor.map(fetch_and_parse_content, links))
-        content_data.extend(results)
+    try:
+        with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+            results = list(executor.map(fetch_and_parse_content, links))
+            content_data.extend(results)
+    except Exception as e:
+        st.error(f"크롤링 중 치명적인 오류 발생: {e}")
 
     return content_data
 
@@ -159,6 +168,10 @@ def clean_text(text):
 # 데이터 저장 함수 (JSON 및 CSV)
 def save_data(data, file_format):
     try:
+        if not data:
+            st.error("저장할 데이터가 없습니다.")
+            return None
+
         if file_format == "json":
             file_path = "crawled_content.json"
             with open(file_path, "w", encoding="utf-8") as f:
@@ -219,7 +232,8 @@ if start_crawl and url_input:
             file_path = save_data(content, file_format)
 
             if file_path:
-                expire_time = datetime.now() + timedelta(hours=1)
+                expire_time = datetime.now() + timedelta(minutes=10)
+                st.info("10분 동안 다운로드가 가능합니다.")
                 while datetime.now() < expire_time:
                     with open(file_path, "rb") as f:
                         st.download_button(
@@ -228,6 +242,6 @@ if start_crawl and url_input:
                             file_name=file_path,
                             mime="application/json" if file_format == "json" else "text/csv"
                         )
-                        time.sleep(60)
+                        time.sleep(60)  # 1분 간격으로 유지
     else:
         st.error("링크를 수집할 수 없습니다. URL을 확인하세요.")
