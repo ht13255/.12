@@ -202,15 +202,14 @@ if start_crawl and url_input:
             file_path = save_data(content, file_format)
 
             if file_path:
-                expire_time = datetime.now() + timedelta(hours=1)
-                while datetime.now() < expire_time:
-                    with open(file_path, "rb") as f:
-                        st.download_button(
-                            label=f"크롤링 결과 다운로드 ({file_format.upper()})",
-                            data=f,
-                            file_name=file_path,
-                            mime="application/json" if file_format == "json" else "text/csv"
-                        )
-                        time.sleep(60)
+                unique_key = f"{file_format}_{time.time()}"
+                with open(file_path, "rb") as f:
+                    st.download_button(
+                        label=f"크롤링 결과 다운로드 ({file_format.upper()})",
+                        data=f,
+                        file_name=file_path,
+                        mime="application/json" if file_format == "json" else "text/csv",
+                        key=unique_key  # 고유한 키 값 추가
+                    )
     else:
         st.error("링크를 수집할 수 없습니다. URL을 확인하세요.")
