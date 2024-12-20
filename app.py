@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import re
 import time
@@ -72,7 +72,7 @@ def collect_links(base_url):
                     continue
                 if href not in visited and href not in links_to_visit:
                     links_to_visit.append(href)
-        except:
+        except Exception as e:
             failed_links.append({"url": url, "error": "HTML 파싱 오류"})
 
     return collected_links, failed_links
@@ -80,6 +80,7 @@ def collect_links(base_url):
 # 멀티스레딩을 이용한 내용 크롤링 함수
 def crawl_content_multithread(links):
     content_data = []
+    failed_links = []
 
     def fetch_and_parse(link):
         try:
@@ -88,14 +89,23 @@ def crawl_content_multithread(links):
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
             return {"url": link, "content": text}
-        except:
-            return {"url": link, "content": "HTML 가져오기 실패"}
+        except Exception as e:
+            failed_links.append({"url": link, "error": str(e)})
+            return None
 
     max_threads = os.cpu_count() or 4
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        content_data.extend(executor.map(fetch_and_parse, links))
+        futures = {executor.submit(fetch_and_parse, link): link for link in links}
 
-    return content_data
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                if result:
+                    content_data.append(result)
+            except Exception as e:
+                failed_links.append({"url": futures[future], "error": str(e)})
+
+    return content_data, failed_links
 
 # 데이터 저장 함수
 def save_data(data, file_format):
@@ -112,7 +122,7 @@ def save_data(data, file_format):
 
 # Streamlit 앱
 st.title("크롤링 사이트")
-st.write("모바일 환경에 최적화된 웹 페이지 크롤러입니다.")
+st.write("중단 없이 안정적인 크롤링을 제공합니다.")
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
@@ -128,11 +138,10 @@ if start_button and url_input:
 
         if links:
             st.success(f"수집된 링크 수: {len(links)}")
-            if failed_links:
-                st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
-            
+            st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
+
             with st.spinner("내용을 크롤링 중입니다..."):
-                content = crawl_content_multithread(links)
+                content, failed_content_links = crawl_content_multithread(links)
 
             if content:
                 file_path = save_data(content, file_format)
@@ -146,5 +155,7 @@ if start_button and url_input:
                         )
                 else:
                     st.error("파일 저장 중 오류가 발생했습니다.")
+            else:
+                st.error("내용 크롤링 중 오류가 발생했습니다.")
         else:
             st.error("수집된 링크가 없습니다. 다시 시도해주세요.")
