@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import time
 
@@ -90,7 +90,12 @@ def crawl_content_multithread(links):
 
     max_threads = os.cpu_count() or 4
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        content_data.extend(executor.map(fetch_and_parse, links))
+        future_to_url = {executor.submit(fetch_and_parse, link): link for link in links}
+        for future in as_completed(future_to_url):
+            try:
+                content_data.append(future.result())
+            except Exception as e:
+                content_data.append({"url": future_to_url[future], "content": f"크롤링 실패: {e}"})
 
     return content_data
 
