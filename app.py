@@ -7,6 +7,7 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import time
+import random
 
 # 필터링 대상
 EXCLUDED_DOMAINS = [
@@ -18,10 +19,24 @@ EXCLUDED_EXTENSIONS = [".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip", ".exe",
 EXCLUDED_SCHEMES = ["mailto:"]  # 메일 링크 제외
 EXCLUDED_KEYWORDS = ["guideline", "terms", "policy", "privacy", "cookies"]
 
-# 사용자 에이전트 설정
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.121 Mobile Safari/537.36"
-}
+# User-Agent 리스트
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
+]
+
+# HTTP 헤더 다양화
+def random_headers():
+    return {
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
 # URL 유효성 검사 함수
 def is_valid_url(url):
@@ -45,7 +60,8 @@ def collect_links(base_url):
         visited.add(url)
 
         try:
-            response = requests.get(url, headers=HEADERS, timeout=1)
+            headers = random_headers()  # 요청마다 헤더 변경
+            response = requests.get(url, headers=headers, timeout=3)
             response.raise_for_status()
         except requests.RequestException as e:
             failed_links.append({"url": url, "error": str(e)})
@@ -71,6 +87,8 @@ def collect_links(base_url):
                     links_to_visit.append(href)
         except Exception as e:
             failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
+        finally:
+            time.sleep(random.uniform(0.5, 2))  # 요청 간 무작위 지연
 
     return collected_links, failed_links
 
@@ -80,7 +98,8 @@ def crawl_content_multithread(links):
 
     def fetch_and_parse(link):
         try:
-            response = requests.get(link, headers=HEADERS, timeout=1)
+            headers = random_headers()  # 요청마다 헤더 변경
+            response = requests.get(link, headers=headers, timeout=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
@@ -115,7 +134,7 @@ def save_data(data, file_format):
 
 # Streamlit 앱
 st.title("크롤링 사이트")
-st.write("중단 방지와 안정성을 강화한 웹 페이지 크롤러입니다.")
+st.write("차단 방지를 위한 우회 기능이 포함된 크롤러입니다.")
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
