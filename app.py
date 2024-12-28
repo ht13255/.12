@@ -10,33 +10,26 @@ import time
 import random
 
 # 필터링 대상
-EXCLUDED_DOMAINS = [
-    "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com",
-    "google.com", "whatsapp.com", "telegram.org", "pinterest.com", "snapchat.com", "reddit.com",
-    "bet", "casino", "gamble", "lotto"
-]
-EXCLUDED_EXTENSIONS = [".pdf", ".docx", ".zip", ".exe", ".png", ".jpg", ".jpeg", ".gif", ".mp4"]
-EXCLUDED_SCHEMES = ["mailto:"]  # 메일 링크 제외
-EXCLUDED_KEYWORDS = ["guideline", "terms", "policy", "privacy", "cookies"]
+EXCLUDED_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com"]
+EXCLUDED_EXTENSIONS = [".pdf", ".docx", ".zip"]
+EXCLUDED_SCHEMES = ["mailto:"]
+EXCLUDED_KEYWORDS = ["guideline", "privacy", "cookies"]
 
 # User-Agent 리스트
 USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
-    "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6) AppleWebKit/605.1.15",
 ]
 
-# HTTP 헤더 다양화
+# HTTP 헤더 생성
 def random_headers():
     return {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
         "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
     }
 
 # URL 유효성 검사
@@ -62,8 +55,7 @@ def collect_links(base_url, progress_placeholder):
         visited.add(url)
 
         try:
-            headers = random_headers()
-            response = requests.get(url, headers=headers, timeout=2)
+            response = requests.get(url, headers=random_headers(), timeout=1)
             response.raise_for_status()
         except requests.RequestException as e:
             failed_links.append({"url": url, "error": str(e)})
@@ -106,8 +98,7 @@ def crawl_content_multithread(links, progress_placeholder):
     def fetch_and_parse(link):
         nonlocal completed
         try:
-            headers = random_headers()
-            response = requests.get(link, headers=headers, timeout=2)
+            response = requests.get(link, headers=random_headers(), timeout=1)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
@@ -119,8 +110,8 @@ def crawl_content_multithread(links, progress_placeholder):
             progress_placeholder.progress(completed / total_links)
         return result
 
-    max_threads = os.cpu_count() * 2
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+    max_threads = os.cpu_count() or 4
+    with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
         for future in as_completed([executor.submit(fetch_and_parse, link) for link in links]):
             try:
                 content_data.append(future.result())
@@ -145,7 +136,6 @@ def save_data(data, file_format):
 
 # Streamlit 앱
 st.title("크롤링 사이트")
-st.write("고속 및 안정성을 갖춘 크롤러입니다.")
 
 # 세션 상태 초기화
 if "file_path" not in st.session_state:
@@ -176,18 +166,14 @@ if start_button and url_input:
             if failed_links:
                 st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
 
-            with st.spinner("내용을 크롤링 중입니다..."):
-                try:
-                    content = crawl_content_multithread(links, progress_bar)
-                    st.success("2단계 완료: 내용 크롤링 완료")
-                except Exception as e:
-                    st.error(f"크롤링 중 오류 발생: {e}")
-                    content = []
-
-            if content:
+            # 데이터 저장
+            try:
+                content = crawl_content_multithread(links, progress_bar)
                 file_path = save_data(content, file_format)
                 st.session_state.file_path = file_path
-                st.success("3단계 완료: 데이터 저장 완료")
+                st.success("2단계 완료: 데이터 저장 완료")
+            except Exception as e:
+                st.error(f"데이터 저장 중 오류 발생: {e}")
 
 if st.session_state.file_path:
     with open(st.session_state.file_path, "rb") as f:
