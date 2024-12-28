@@ -6,12 +6,8 @@ import json
 import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
+import time
 import random
-import torch  # PyTorch for GPU processing
-
-# GPU 활성화 여부 확인
-use_gpu = torch.cuda.is_available()
-device = torch.device("cuda" if use_gpu else "cpu")
 
 # 필터링 대상
 EXCLUDED_DOMAINS = [
@@ -40,6 +36,8 @@ def random_headers():
         "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache"
     }
 
 # URL 유효성 검사 함수
@@ -51,11 +49,12 @@ def is_valid_url(url):
         return False
 
 # 링크를 수집하는 함수
-def collect_links(base_url):
+def collect_links(base_url, progress_placeholder):
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
     failed_links = []
+    total_links = 1  # 시작 링크 포함
 
     while links_to_visit:
         url = links_to_visit.pop()
@@ -65,7 +64,7 @@ def collect_links(base_url):
 
         try:
             headers = random_headers()
-            response = requests.get(url, headers=headers, timeout=2)
+            response = requests.get(url, headers=headers, timeout=3)
             response.raise_for_status()
         except requests.RequestException as e:
             failed_links.append({"url": url, "error": str(e)})
@@ -89,6 +88,10 @@ def collect_links(base_url):
                     continue
                 if href not in visited and href not in links_to_visit:
                     links_to_visit.append(href)
+                    total_links += 1
+
+            # 진행률 업데이트
+            progress_placeholder.progress(len(visited) / total_links)
 
         except Exception as e:
             failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
@@ -96,7 +99,7 @@ def collect_links(base_url):
     return collected_links, failed_links
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links):
+def crawl_content_multithread(links, progress_placeholder):
     content_data = []
     total_links = len(links)
     completed = 0
@@ -105,7 +108,7 @@ def crawl_content_multithread(links):
         nonlocal completed
         try:
             headers = random_headers()
-            response = requests.get(link, headers=headers, timeout=2)
+            response = requests.get(link, headers=headers, timeout=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
@@ -114,24 +117,14 @@ def crawl_content_multithread(links):
             result = {"url": link, "content": f"HTML 가져오기 실패: {e}"}
         finally:
             completed += 1
+            progress_placeholder.progress(completed / total_links)
         return result
 
-    max_threads = os.cpu_count()  # 항상 최대 스레드 유지
-    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        future_to_url = {executor.submit(fetch_and_parse, link): link for link in links}
-        for future in as_completed(future_to_url):
-            try:
-                content_data.append(future.result())
-            except Exception as e:
-                content_data.append({"url": future_to_url[future], "content": f"크롤링 실패: {e}"})
+    max_threads = os.cpu_count() or 4
+    with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:  # 멀티스레드 최대로 확장
+        content_data.extend(executor.map(fetch_and_parse, links))
 
     return content_data
-
-# GPU에서 텍스트 분석 처리 (예시)
-def analyze_with_gpu(data):
-    # GPU 텐서 생성
-    tensor_data = torch.tensor([len(item["content"]) for item in data], device=device)
-    return tensor_data.sum().item()
 
 # 데이터 저장 함수
 def save_data(data, file_format):
@@ -148,53 +141,59 @@ def save_data(data, file_format):
         return None
 
 # Streamlit 앱
-st.title("고속 크롤링 및 GPU 확장 크롤러")
-st.write("멀티스레드와 GPU를 최대한 활용하는 크롤러입니다.")
-
-if use_gpu:
-    st.success("GPU가 활성화되었습니다!")
-else:
-    st.warning("GPU를 사용할 수 없습니다. CPU 모드로 실행합니다.")
+st.title("크롤링 사이트")
+st.write("오류를 최대한 방지한 안정적인 고속 크롤러입니다.")
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
 file_format = st.radio("저장할 파일 형식 선택:", ["json", "csv"])
 start_button = st.button("크롤링 시작")
 
+# 세션 상태에서 파일 경로 유지
+if "file_path" not in st.session_state:
+    st.session_state.file_path = None
+
 if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
     else:
+        progress_placeholder = st.empty()
+        progress_bar = st.progress(0)
+
         with st.spinner("링크를 수집 중입니다..."):
             try:
-                links, failed_links = collect_links(url_input)
-                st.success(f"수집된 링크 수: {len(links)}")
+                links, failed_links = collect_links(url_input, progress_bar)
+                st.success("1단계 완료: 링크 수집 완료")
             except Exception as e:
                 st.error(f"링크 수집 중 오류 발생: {e}")
                 links, failed_links = [], []
 
         if links:
+            st.success(f"수집된 링크 수: {len(links)}")
+            if failed_links:
+                st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
+
             with st.spinner("내용을 크롤링 중입니다..."):
                 try:
-                    content = crawl_content_multithread(links)
-                    st.success(f"크롤링된 데이터 수: {len(content)}")
+                    content = crawl_content_multithread(links, progress_bar)
+                    st.success("2단계 완료: 내용 크롤링 완료")
                 except Exception as e:
                     st.error(f"크롤링 중 오류 발생: {e}")
                     content = []
 
             if content:
-                # GPU 텍스트 분석 (옵션)
-                if use_gpu:
-                    total_length = analyze_with_gpu(content)
-                    st.info(f"GPU를 사용하여 분석된 총 텍스트 길이: {total_length}")
-
-                # 데이터 저장 및 다운로드
                 file_path = save_data(content, file_format)
                 if file_path:
-                    with open(file_path, "rb") as f:
-                        st.download_button(
-                            label=f"크롤링 결과 다운로드 ({file_format.upper()})",
-                            data=f,
-                            file_name=file_path,
-                            mime="application/json" if file_format == "json" else "text/csv"
-                        )
+                    st.session_state.file_path = file_path
+                    st.success("3단계 완료: 데이터 저장 완료")
+                else:
+                    st.error("파일 저장 중 오류가 발생했습니다.")
+
+if st.session_state.file_path:
+    with open(st.session_state.file_path, "rb") as f:
+        st.download_button(
+            label="크롤링 결과 다운로드",
+            data=f,
+            file_name=st.session_state.file_path,
+            mime="application/json" if st.session_state.file_path.endswith("json") else "text/csv"
+        )
