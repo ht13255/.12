@@ -10,8 +10,8 @@ import time
 import random
 
 # 필터링 대상
-EXCLUDED_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com"]
-EXCLUDED_EXTENSIONS = [".pdf", ".docx", ".zip"]
+EXCLUDED_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
+EXCLUDED_EXTENSIONS = [".pdf", ".docx", ".zip", ".exe"]
 EXCLUDED_SCHEMES = ["mailto:"]
 EXCLUDED_KEYWORDS = ["guideline", "privacy", "cookies"]
 
@@ -23,13 +23,19 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6) AppleWebKit/605.1.15",
 ]
 
+# 프록시 리스트
+PROXIES = [
+    {"http": "http://proxy1.com:8080", "https": "https://proxy1.com:8080"},
+    {"http": "http://proxy2.com:8080", "https": "https://proxy2.com:8080"},
+    None,  # 직접 연결
+]
+
 # HTTP 헤더 생성
 def random_headers():
     return {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept-Language": "en-US,en;q=0.9",
         "Cache-Control": "no-cache",
-        "Pragma": "no-cache",
     }
 
 # URL 유효성 검사
@@ -55,7 +61,9 @@ def collect_links(base_url, progress_placeholder):
         visited.add(url)
 
         try:
-            response = requests.get(url, headers=random_headers(), timeout=1)
+            headers = random_headers()
+            proxy = random.choice(PROXIES)  # 프록시 선택
+            response = requests.get(url, headers=headers, proxies=proxy, timeout=3)
             response.raise_for_status()
         except requests.RequestException as e:
             failed_links.append({"url": url, "error": str(e)})
@@ -98,7 +106,9 @@ def crawl_content_multithread(links, progress_placeholder):
     def fetch_and_parse(link):
         nonlocal completed
         try:
-            response = requests.get(link, headers=random_headers(), timeout=1)
+            headers = random_headers()
+            proxy = random.choice(PROXIES)
+            response = requests.get(link, headers=headers, proxies=proxy, timeout=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
@@ -112,11 +122,7 @@ def crawl_content_multithread(links, progress_placeholder):
 
     max_threads = os.cpu_count() or 4
     with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
-        for future in as_completed([executor.submit(fetch_and_parse, link) for link in links]):
-            try:
-                content_data.append(future.result())
-            except Exception as e:
-                content_data.append({"url": link, "content": f"스레드 작업 실패: {e}"})
+        content_data.extend(executor.map(fetch_and_parse, links))
 
     return content_data
 
@@ -166,14 +172,18 @@ if start_button and url_input:
             if failed_links:
                 st.warning(f"수집 실패한 링크 수: {len(failed_links)}")
 
-            # 데이터 저장
-            try:
-                content = crawl_content_multithread(links, progress_bar)
+            with st.spinner("내용을 크롤링 중입니다..."):
+                try:
+                    content = crawl_content_multithread(links, progress_bar)
+                    st.success("2단계 완료: 내용 크롤링 완료")
+                except Exception as e:
+                    st.error(f"크롤링 중 오류 발생: {e}")
+                    content = []
+
+            if content:
                 file_path = save_data(content, file_format)
                 st.session_state.file_path = file_path
-                st.success("2단계 완료: 데이터 저장 완료")
-            except Exception as e:
-                st.error(f"데이터 저장 중 오류 발생: {e}")
+                st.success("3단계 완료: 데이터 저장 완료")
 
 if st.session_state.file_path:
     with open(st.session_state.file_path, "rb") as f:
