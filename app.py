@@ -47,11 +47,12 @@ def is_valid_url(url):
         return False
 
 # 링크를 수집하는 함수
-def collect_links(base_url):
+def collect_links(base_url, progress_placeholder):
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
     failed_links = []
+    total_links = 1  # 시작 링크 포함
 
     while links_to_visit:
         url = links_to_visit.pop()
@@ -60,7 +61,7 @@ def collect_links(base_url):
         visited.add(url)
 
         try:
-            headers = random_headers()  # 요청마다 헤더 변경
+            headers = random_headers()
             response = requests.get(url, headers=headers, timeout=3)
             response.raise_for_status()
         except requests.RequestException as e:
@@ -85,6 +86,11 @@ def collect_links(base_url):
                     continue
                 if href not in visited and href not in links_to_visit:
                     links_to_visit.append(href)
+                    total_links += 1
+
+            # 진행률 업데이트
+            progress_placeholder.progress(len(visited) / total_links)
+
         except Exception as e:
             failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
         finally:
@@ -93,28 +99,30 @@ def collect_links(base_url):
     return collected_links, failed_links
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links):
+def crawl_content_multithread(links, progress_placeholder):
     content_data = []
+    total_links = len(links)
+    completed = 0
 
     def fetch_and_parse(link):
+        nonlocal completed
         try:
-            headers = random_headers()  # 요청마다 헤더 변경
+            headers = random_headers()
             response = requests.get(link, headers=headers, timeout=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
-            return {"url": link, "content": text}
+            result = {"url": link, "content": text}
         except Exception as e:
-            return {"url": link, "content": f"HTML 가져오기 실패: {e}"}
+            result = {"url": link, "content": f"HTML 가져오기 실패: {e}"}
+        finally:
+            completed += 1
+            progress_placeholder.progress(completed / total_links)
+        return result
 
     max_threads = os.cpu_count() or 4
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        future_to_url = {executor.submit(fetch_and_parse, link): link for link in links}
-        for future in as_completed(future_to_url):
-            try:
-                content_data.append(future.result())
-            except Exception as e:
-                content_data.append({"url": future_to_url[future], "content": f"크롤링 실패: {e}"})
+        content_data.extend(executor.map(fetch_and_parse, links))
 
     return content_data
 
@@ -134,7 +142,7 @@ def save_data(data, file_format):
 
 # Streamlit 앱
 st.title("크롤링 사이트")
-st.write("차단 방지를 위한 우회 기능이 포함된 크롤러입니다.")
+st.write("중단 방지와 진행 상태가 표시되는 크롤러입니다.")
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
@@ -145,9 +153,12 @@ if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
     else:
+        progress_placeholder = st.empty()
+        progress_bar = st.progress(0)
+
         with st.spinner("링크를 수집 중입니다..."):
             try:
-                links, failed_links = collect_links(url_input)
+                links, failed_links = collect_links(url_input, progress_bar)
             except Exception as e:
                 st.error(f"링크 수집 중 오류 발생: {e}")
                 links, failed_links = [], []
@@ -159,7 +170,7 @@ if start_button and url_input:
 
             with st.spinner("내용을 크롤링 중입니다..."):
                 try:
-                    content = crawl_content_multithread(links)
+                    content = crawl_content_multithread(links, progress_bar)
                 except Exception as e:
                     st.error(f"크롤링 중 오류 발생: {e}")
                     content = []
