@@ -137,14 +137,24 @@ def save_data(data, file_format):
         st.error(f"파일 저장 중 오류 발생: {e}")
         return None
 
+# 세션 상태 초기화
+def initialize_session_state():
+    if "step" not in st.session_state:
+        st.session_state.step = 0  # 현재 단계
+    if "file_path" not in st.session_state:
+        st.session_state.file_path = None  # 파일 경로
+    if "links" not in st.session_state:
+        st.session_state.links = []  # 수집된 링크
+    if "failed_links" not in st.session_state:
+        st.session_state.failed_links = []  # 실패한 링크
+    if "content" not in st.session_state:
+        st.session_state.content = []  # 크롤링된 내용
+
 # Streamlit 앱
 st.title("크롤링 사이트")
 
 # 세션 상태 초기화
-if "step" not in st.session_state:
-    st.session_state.step = 0  # 단계 0부터 시작
-if "file_path" not in st.session_state:
-    st.session_state.file_path = None
+initialize_session_state()
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
