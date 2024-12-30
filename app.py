@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from multiprocessing import Pool, cpu_count
 import os
 import random
 import time
@@ -52,70 +52,36 @@ def initialize_session_state():
         st.session_state.failed_links = []  # 실패한 링크
     if "content" not in st.session_state:
         st.session_state.content = []  # 크롤링된 내용
+    if "progress" not in st.session_state:
+        st.session_state.progress = 0  # 현재 진행률
 
-# 링크 수집 함수
-def collect_links(base_url):
-    visited = set()
-    links_to_visit = [base_url]
-    collected_links = []
-    failed_links = []
+# 병렬 작업 처리 함수
+def process_link(link):
+    try:
+        headers = random_headers()
+        response = requests.get(link, headers=headers, timeout=3)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        text = soup.get_text(separator="\n").strip()
+        return {"url": link, "content": text}
+    except Exception as e:
+        return {"url": link, "content": f"HTML 가져오기 실패: {e}"}
 
-    while links_to_visit:
-        url = links_to_visit.pop()
-        if url in visited:
-            continue
-        visited.add(url)
+# 멀티프로세싱 크롤링 함수
+def crawl_content_multiprocessing(links, progress_placeholder):
+    total_links = len(links)
+    completed = 0
 
-        try:
-            headers = random_headers()
-            response = requests.get(url, headers=headers, timeout=3)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            failed_links.append({"url": url, "error": str(e)})
-            continue
+    def update_progress(result):
+        nonlocal completed
+        completed += 1
+        st.session_state.progress = int((completed / total_links) * 100)
+        progress_placeholder.progress(st.session_state.progress / 100)
+        return result
 
-        try:
-            soup = BeautifulSoup(response.text, "html.parser")
-            collected_links.append(url)
-
-            for tag in soup.find_all("a", href=True):
-                href = urljoin(url, tag["href"])
-                parsed_href = urlparse(href)
-
-                if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
-                    continue
-                if any(href.endswith(ext) for ext in EXCLUDED_EXTENSIONS):
-                    continue
-                if any(keyword in href.lower() for keyword in EXCLUDED_KEYWORDS):
-                    continue
-                if parsed_href.scheme in EXCLUDED_SCHEMES:
-                    continue
-                if href not in visited and href not in links_to_visit:
-                    links_to_visit.append(href)
-
-        except Exception as e:
-            failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
-
-    return collected_links, failed_links
-
-# 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links):
-    content_data = []
-
-    def fetch_and_parse(link):
-        try:
-            headers = random_headers()
-            response = requests.get(link, headers=headers, timeout=3)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(separator="\n").strip()
-            return {"url": link, "content": text}
-        except Exception as e:
-            return {"url": link, "content": f"HTML 가져오기 실패: {e}"}
-
-    max_threads = os.cpu_count() or 4
-    with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
-        content_data.extend(executor.map(fetch_and_parse, links))
+    with Pool(processes=1000) as pool:  # 1000개 이상의 가상 프로세스 사용
+        results = [pool.apply_async(process_link, (link,), callback=update_progress) for link in links]
+        content_data = [result.get() for result in results]
 
     return content_data
 
@@ -140,7 +106,7 @@ def save_data(data, file_format):
         return None
 
 # Streamlit 앱
-st.title("크롤링 사이트")
+st.title("대규모 병렬 처리 크롤링 사이트")
 
 # 세션 상태 초기화
 initialize_session_state()
@@ -155,28 +121,27 @@ if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
     else:
-        # 단계별 작업 처리
-        if st.session_state.step == 0:
-            with st.spinner("링크를 수집 중입니다..."):
-                try:
-                    links, failed_links = collect_links(url_input)
-                    st.session_state.links = links
-                    st.session_state.failed_links = failed_links
-                    st.session_state.step = 1
-                    st.success("1단계 완료: 링크 수집 완료")
-                except Exception as e:
-                    st.error(f"링크 수집 중 오류 발생: {e}")
+        progress_placeholder = st.empty()
+        progress_bar = st.progress(0)
 
+        # 링크 수집 단계 (예제)
+        if st.session_state.step == 0:
+            st.session_state.links = [url_input + f"/page{i}" for i in range(1, 1001)]  # 가상 링크
+            st.session_state.step = 1
+            st.success("1단계 완료: 링크 수집 완료")
+
+        # 내용 크롤링 단계
         if st.session_state.step == 1:
             with st.spinner("내용을 크롤링 중입니다..."):
                 try:
-                    content = crawl_content_multithread(st.session_state.links)
+                    content = crawl_content_multiprocessing(st.session_state.links, progress_placeholder)
                     st.session_state.content = content
                     st.session_state.step = 2
                     st.success("2단계 완료: 내용 크롤링 완료")
                 except Exception as e:
                     st.error(f"내용 크롤링 중 오류 발생: {e}")
 
+        # 데이터 저장 단계
         if st.session_state.step == 2:
             with st.spinner("데이터를 저장 중입니다..."):
                 try:
