@@ -39,13 +39,26 @@ def is_valid_url(url):
     except Exception:
         return False
 
+# 세션 상태 초기화 함수
+def initialize_session_state():
+    """Initialize all session state variables to prevent uninitialized access."""
+    if "step" not in st.session_state:
+        st.session_state.step = 0  # 현재 단계
+    if "file_path" not in st.session_state:
+        st.session_state.file_path = None  # 파일 경로
+    if "links" not in st.session_state:
+        st.session_state.links = []  # 수집된 링크
+    if "failed_links" not in st.session_state:
+        st.session_state.failed_links = []  # 실패한 링크
+    if "content" not in st.session_state:
+        st.session_state.content = []  # 크롤링된 내용
+
 # 링크 수집 함수
-def collect_links(base_url, progress_placeholder):
+def collect_links(base_url):
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
     failed_links = []
-    total_links = 1
 
     while links_to_visit:
         url = links_to_visit.pop()
@@ -79,10 +92,6 @@ def collect_links(base_url, progress_placeholder):
                     continue
                 if href not in visited and href not in links_to_visit:
                     links_to_visit.append(href)
-                    total_links += 1
-
-            # 진행률 업데이트
-            progress_placeholder.progress(len(visited) / total_links)
 
         except Exception as e:
             failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
@@ -90,26 +99,19 @@ def collect_links(base_url, progress_placeholder):
     return collected_links, failed_links
 
 # 멀티스레딩을 이용한 내용 크롤링 함수
-def crawl_content_multithread(links, progress_placeholder):
+def crawl_content_multithread(links):
     content_data = []
-    total_links = len(links)
-    completed = 0
 
     def fetch_and_parse(link):
-        nonlocal completed
         try:
             headers = random_headers()
             response = requests.get(link, headers=headers, timeout=3)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             text = soup.get_text(separator="\n").strip()
-            result = {"url": link, "content": text}
+            return {"url": link, "content": text}
         except Exception as e:
-            result = {"url": link, "content": f"HTML 가져오기 실패: {e}"}
-        finally:
-            completed += 1
-            progress_placeholder.progress(completed / total_links)
-        return result
+            return {"url": link, "content": f"HTML 가져오기 실패: {e}"}
 
     max_threads = os.cpu_count() or 4
     with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
@@ -137,19 +139,6 @@ def save_data(data, file_format):
         st.error(f"파일 저장 중 오류 발생: {e}")
         return None
 
-# 세션 상태 초기화
-def initialize_session_state():
-    if "step" not in st.session_state:
-        st.session_state.step = 0  # 현재 단계
-    if "file_path" not in st.session_state:
-        st.session_state.file_path = None  # 파일 경로
-    if "links" not in st.session_state:
-        st.session_state.links = []  # 수집된 링크
-    if "failed_links" not in st.session_state:
-        st.session_state.failed_links = []  # 실패한 링크
-    if "content" not in st.session_state:
-        st.session_state.content = []  # 크롤링된 내용
-
 # Streamlit 앱
 st.title("크롤링 사이트")
 
@@ -166,14 +155,11 @@ if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
     else:
-        progress_placeholder = st.empty()
-        progress_bar = st.progress(0)
-
-        # 1단계: 링크 수집
+        # 단계별 작업 처리
         if st.session_state.step == 0:
             with st.spinner("링크를 수집 중입니다..."):
                 try:
-                    links, failed_links = collect_links(url_input, progress_bar)
+                    links, failed_links = collect_links(url_input)
                     st.session_state.links = links
                     st.session_state.failed_links = failed_links
                     st.session_state.step = 1
@@ -181,18 +167,16 @@ if start_button and url_input:
                 except Exception as e:
                     st.error(f"링크 수집 중 오류 발생: {e}")
 
-        # 2단계: 내용 크롤링
         if st.session_state.step == 1:
             with st.spinner("내용을 크롤링 중입니다..."):
                 try:
-                    content = crawl_content_multithread(st.session_state.links, progress_bar)
+                    content = crawl_content_multithread(st.session_state.links)
                     st.session_state.content = content
                     st.session_state.step = 2
                     st.success("2단계 완료: 내용 크롤링 완료")
                 except Exception as e:
                     st.error(f"내용 크롤링 중 오류 발생: {e}")
 
-        # 3단계: 데이터 저장
         if st.session_state.step == 2:
             with st.spinner("데이터를 저장 중입니다..."):
                 try:
