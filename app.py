@@ -31,15 +31,19 @@ def random_headers():
         "Cache-Control": "no-cache",
     }
 
-# URL 유효성 검사
+# URL 유효성 검사 함수
 def is_valid_url(url):
     try:
         parsed = urlparse(url)
-        # URL 길이 제한 (2048자 이하) 및 스키마 검사
-        if len(url) > 2048 or not parsed.scheme in ["http", "https"]:
+        # 기본적인 URL 구조 검증
+        if not parsed.netloc or not parsed.scheme:
             return False
-        # 유효한 netloc 확인
-        if not parsed.netloc or not parsed.path:
+        # 비정상적인 URL 필터링
+        if any(parsed.path.endswith(ext) for ext in EXCLUDED_EXTENSIONS):
+            return False
+        if any(keyword in url.lower() for keyword in EXCLUDED_KEYWORDS):
+            return False
+        if parsed.scheme not in ["http", "https"]:
             return False
         return True
     except Exception:
@@ -54,14 +58,13 @@ def collect_links(base_url, progress_placeholder):
     total_links = 1
 
     while links_to_visit:
-        url = links_to_visit.pop(0)
+        url = links_to_visit.pop(0)  # FIFO 방식으로 처리
         if url in visited:
             continue
         visited.add(url)
 
         try:
-            headers = random_headers()
-            response = requests.get(url, headers=headers, timeout=5)
+            response = requests.get(url, headers=random_headers(), timeout=5)
             response.raise_for_status()
         except requests.RequestException as e:
             failed_links.append({"url": url, "error": str(e)})
@@ -72,24 +75,20 @@ def collect_links(base_url, progress_placeholder):
             collected_links.append(url)
 
             for tag in soup.find_all("a", href=True):
-                href = urljoin(url, tag["href"])
+                href = urljoin(url, tag["href"]).strip()
                 parsed_href = urlparse(href)
 
-                # URL 유효성 검사
+                # URL 유효성 검증 및 필터링
                 if not is_valid_url(href):
                     failed_links.append({"url": href, "error": "유효하지 않은 URL"})
                     continue
+                if href in visited or href in links_to_visit:
+                    continue
                 if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
                     continue
-                if any(href.endswith(ext) for ext in EXCLUDED_EXTENSIONS):
-                    continue
-                if any(keyword in href.lower() for keyword in EXCLUDED_KEYWORDS):
-                    continue
-                if parsed_href.scheme in EXCLUDED_SCHEMES:
-                    continue
-                if href not in visited and href not in links_to_visit:
-                    links_to_visit.append(href)
-                    total_links += 1
+
+                links_to_visit.append(href)
+                total_links += 1
 
             # 진행률 업데이트
             progress_placeholder.progress(len(visited) / total_links)
@@ -99,22 +98,79 @@ def collect_links(base_url, progress_placeholder):
 
     return collected_links, failed_links
 
+# 멀티스레드 크롤링 함수
+def crawl_content_multithread(links, progress_placeholder):
+    content_data = []
+    total_links = len(links)
+    completed = 0
+
+    def fetch_and_parse(link):
+        nonlocal completed
+        try:
+            response = requests.get(link, headers=random_headers(), timeout=5)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            text = soup.get_text(separator="\n").strip()
+            return {"url": link, "content": text}
+        except Exception as e:
+            return {"url": link, "content": f"HTML 파싱 실패: {e}"}
+        finally:
+            completed += 1
+            progress_placeholder.progress(completed / total_links)
+
+    max_threads = os.cpu_count() or 4
+    with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
+        futures = [executor.submit(fetch_and_parse, link) for link in links]
+        for future in as_completed(futures):
+            content_data.append(future.result())
+
+    return content_data
+
+# 데이터 저장 함수
+def save_data(data, file_format):
+    try:
+        file_path = f"crawled_content.{file_format}"
+        if file_format == "json":
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        elif file_format == "csv":
+            pd.DataFrame(data).to_csv(file_path, index=False, encoding="utf-8")
+        elif file_format == "txt":
+            with open(file_path, "w", encoding="utf-8") as f:
+                for entry in data:
+                    f.write(f"URL: {entry['url']}\n")
+                    f.write(f"Content:\n{entry['content']}\n")
+                    f.write("=" * 80 + "\n")
+        return file_path
+    except Exception as e:
+        st.error(f"파일 저장 중 오류 발생: {e}")
+        return None
+
+# 세션 상태 초기화
+def initialize_session_state():
+    if "step" not in st.session_state:
+        st.session_state.step = 0
+    if "file_path" not in st.session_state:
+        st.session_state.file_path = None
+    if "links" not in st.session_state:
+        st.session_state.links = []
+    if "failed_links" not in st.session_state:
+        st.session_state.failed_links = []
+    if "content" not in st.session_state:
+        st.session_state.content = []
+
 # Streamlit 앱
 st.title("크롤링 사이트")
 
 # 세션 상태 초기화
-if "step" not in st.session_state:
-    st.session_state.step = 0
-if "links" not in st.session_state:
-    st.session_state.links = []
-if "failed_links" not in st.session_state:
-    st.session_state.failed_links = []
+initialize_session_state()
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
+file_format = st.radio("저장할 파일 형식 선택:", ["json", "csv", "txt"])
 start_button = st.button("크롤링 시작")
 
-# 링크 수집 처리
+# 단계별 작업 처리
 if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
@@ -122,6 +178,7 @@ if start_button and url_input:
         progress_placeholder = st.empty()
         progress_bar = st.progress(0)
 
+        # 1단계: 링크 수집
         if st.session_state.step == 0:
             with st.spinner("링크를 수집 중입니다..."):
                 try:
@@ -129,14 +186,40 @@ if start_button and url_input:
                     st.session_state.links = links
                     st.session_state.failed_links = failed_links
                     st.session_state.step = 1
-                    st.success(f"1단계 완료: {len(links)}개의 링크를 수집했습니다.")
+                    st.success("1단계 완료: 링크 수집 완료")
                 except Exception as e:
                     st.error(f"링크 수집 중 오류 발생: {e}")
 
-# 수집된 링크 및 실패한 링크 표시
-if st.session_state.step > 0:
-    st.write("### 수집된 링크:")
-    st.write(st.session_state.links)
+        # 2단계: 내용 크롤링
+        if st.session_state.step == 1:
+            with st.spinner("내용을 크롤링 중입니다..."):
+                try:
+                    content = crawl_content_multithread(st.session_state.links, progress_bar)
+                    st.session_state.content = content
+                    st.session_state.step = 2
+                    st.success("2단계 완료: 내용 크롤링 완료")
+                except Exception as e:
+                    st.error(f"내용 크롤링 중 오류 발생: {e}")
 
-    st.write("### 실패한 링크:")
-    st.write(st.session_state.failed_links)
+        # 3단계: 데이터 저장
+        if st.session_state.step == 2:
+            with st.spinner("데이터를 저장 중입니다..."):
+                try:
+                    file_path = save_data(st.session_state.content, file_format)
+                    st.session_state.file_path = file_path
+                    st.session_state.step = 3
+                    st.success("3단계 완료: 데이터 저장 완료")
+                except Exception as e:
+                    st.error(f"데이터 저장 중 오류 발생: {e}")
+
+# 다운로드 버튼 유지
+if st.session_state.step == 3 and st.session_state.file_path:
+    with open(st.session_state.file_path, "rb") as f:
+        st.download_button(
+            label="크롤링 결과 다운로드",
+            data=f,
+            file_name=st.session_state.file_path,
+            mime="application/json" if st.session_state.file_path.endswith("json") else
+                 "text/csv" if st.session_state.file_path.endswith("csv") else
+                 "text/plain",
+        )
