@@ -1,13 +1,12 @@
 import streamlit as st
-import requests
+import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import json
 import pandas as pd
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import random
-import time
 
 # 필터링 대상
 EXCLUDED_DOMAINS = ["facebook.com", "instagram.com", "twitter.com", "linkedin.com", "tiktok.com"]
@@ -35,10 +34,8 @@ def random_headers():
 def is_valid_url(url):
     try:
         parsed = urlparse(url)
-        # 기본적인 URL 구조 검증
         if not parsed.netloc or not parsed.scheme:
             return False
-        # 비정상적인 URL 필터링
         if any(parsed.path.endswith(ext) for ext in EXCLUDED_EXTENSIONS):
             return False
         if any(keyword in url.lower() for keyword in EXCLUDED_KEYWORDS):
@@ -49,80 +46,66 @@ def is_valid_url(url):
     except Exception:
         return False
 
-# 링크 수집 함수
-def collect_links(base_url, progress_placeholder):
+# 비동기 요청 함수
+async def fetch_url(session, url):
+    try:
+        async with session.get(url, headers=random_headers(), timeout=10) as response:
+            response.raise_for_status()
+            return await response.text()
+    except Exception as e:
+        return None
+
+# 비동기 링크 수집 함수
+async def collect_links(base_url):
     visited = set()
     links_to_visit = [base_url]
     collected_links = []
     failed_links = []
-    total_links = 1
 
-    while links_to_visit:
-        url = links_to_visit.pop(0)  # FIFO 방식으로 처리
-        if url in visited:
-            continue
-        visited.add(url)
+    async with aiohttp.ClientSession() as session:
+        while links_to_visit:
+            url = links_to_visit.pop(0)
+            if url in visited:
+                continue
+            visited.add(url)
 
-        try:
-            response = requests.get(url, headers=random_headers(), timeout=5)
-            response.raise_for_status()
-        except requests.RequestException as e:
-            failed_links.append({"url": url, "error": str(e)})
-            continue
+            html = await fetch_url(session, url)
+            if not html:
+                failed_links.append({"url": url, "error": "요청 실패"})
+                continue
 
-        try:
-            soup = BeautifulSoup(response.text, "html.parser")
-            collected_links.append(url)
+            try:
+                soup = BeautifulSoup(html, "html.parser")
+                collected_links.append(url)
 
-            for tag in soup.find_all("a", href=True):
-                href = urljoin(url, tag["href"]).strip()
-                parsed_href = urlparse(href)
+                for tag in soup.find_all("a", href=True):
+                    href = urljoin(url, tag["href"]).strip()
+                    if not is_valid_url(href) or href in visited or href in links_to_visit:
+                        continue
+                    if any(domain in urlparse(href).netloc for domain in EXCLUDED_DOMAINS):
+                        continue
 
-                # URL 유효성 검증 및 필터링
-                if not is_valid_url(href):
-                    failed_links.append({"url": href, "error": "유효하지 않은 URL"})
-                    continue
-                if href in visited or href in links_to_visit:
-                    continue
-                if any(domain in parsed_href.netloc for domain in EXCLUDED_DOMAINS):
-                    continue
-
-                links_to_visit.append(href)
-                total_links += 1
-
-            # 진행률 업데이트
-            progress_placeholder.progress(len(visited) / total_links)
-
-        except Exception as e:
-            failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
+                    links_to_visit.append(href)
+            except Exception as e:
+                failed_links.append({"url": url, "error": f"HTML 파싱 오류: {e}"})
 
     return collected_links, failed_links
 
-# 멀티스레드 크롤링 함수
-def crawl_content_multithread(links, progress_placeholder):
+# 비동기 크롤링 함수
+async def crawl_content(links):
     content_data = []
-    total_links = len(links)
-    completed = 0
-
-    def fetch_and_parse(link):
-        nonlocal completed
-        try:
-            response = requests.get(link, headers=random_headers(), timeout=5)
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(separator="\n").strip()
-            return {"url": link, "content": text}
-        except Exception as e:
-            return {"url": link, "content": f"HTML 파싱 실패: {e}"}
-        finally:
-            completed += 1
-            progress_placeholder.progress(completed / total_links)
-
-    max_threads = os.cpu_count() or 4
-    with ThreadPoolExecutor(max_workers=max_threads * 2) as executor:
-        futures = [executor.submit(fetch_and_parse, link) for link in links]
-        for future in as_completed(futures):
-            content_data.append(future.result())
+    async with aiohttp.ClientSession() as session:
+        for link in links:
+            html = await fetch_url(session, link)
+            if not html:
+                content_data.append({"url": link, "content": "요청 실패"})
+                continue
+            try:
+                soup = BeautifulSoup(html, "html.parser")
+                text = soup.get_text(separator="\n").strip()
+                content_data.append({"url": link, "content": text})
+            except Exception as e:
+                content_data.append({"url": link, "content": f"HTML 파싱 오류: {e}"})
 
     return content_data
 
@@ -146,71 +129,52 @@ def save_data(data, file_format):
         st.error(f"파일 저장 중 오류 발생: {e}")
         return None
 
-# 세션 상태 초기화
-def initialize_session_state():
-    if "step" not in st.session_state:
-        st.session_state.step = 0
-    if "file_path" not in st.session_state:
-        st.session_state.file_path = None
-    if "links" not in st.session_state:
-        st.session_state.links = []
-    if "failed_links" not in st.session_state:
-        st.session_state.failed_links = []
-    if "content" not in st.session_state:
-        st.session_state.content = []
-
 # Streamlit 앱
 st.title("크롤링 사이트")
 
 # 세션 상태 초기화
-initialize_session_state()
+if "step" not in st.session_state:
+    st.session_state.step = 0
+if "file_path" not in st.session_state:
+    st.session_state.file_path = None
+if "links" not in st.session_state:
+    st.session_state.links = []
+if "failed_links" not in st.session_state:
+    st.session_state.failed_links = []
+if "content" not in st.session_state:
+    st.session_state.content = []
 
 # 입력 필드
 url_input = st.text_input("크롤링할 사이트 URL을 입력하세요:", placeholder="https://example.com")
 file_format = st.radio("저장할 파일 형식 선택:", ["json", "csv", "txt"])
 start_button = st.button("크롤링 시작")
 
-# 단계별 작업 처리
+# 크롤링 작업 실행
 if start_button and url_input:
     if not is_valid_url(url_input):
         st.error("유효한 URL을 입력하세요.")
     else:
-        progress_placeholder = st.empty()
-        progress_bar = st.progress(0)
-
-        # 1단계: 링크 수집
-        if st.session_state.step == 0:
+        async def run_crawl():
+            st.session_state.step = 1
             with st.spinner("링크를 수집 중입니다..."):
-                try:
-                    links, failed_links = collect_links(url_input, progress_bar)
-                    st.session_state.links = links
-                    st.session_state.failed_links = failed_links
-                    st.session_state.step = 1
-                    st.success("1단계 완료: 링크 수집 완료")
-                except Exception as e:
-                    st.error(f"링크 수집 중 오류 발생: {e}")
+                collected_links, failed_links = await collect_links(url_input)
+                st.session_state.links = collected_links
+                st.session_state.failed_links = failed_links
+                st.success("1단계 완료: 링크 수집 완료")
 
-        # 2단계: 내용 크롤링
-        if st.session_state.step == 1:
+            st.session_state.step = 2
             with st.spinner("내용을 크롤링 중입니다..."):
-                try:
-                    content = crawl_content_multithread(st.session_state.links, progress_bar)
-                    st.session_state.content = content
-                    st.session_state.step = 2
-                    st.success("2단계 완료: 내용 크롤링 완료")
-                except Exception as e:
-                    st.error(f"내용 크롤링 중 오류 발생: {e}")
+                content = await crawl_content(st.session_state.links)
+                st.session_state.content = content
+                st.success("2단계 완료: 내용 크롤링 완료")
 
-        # 3단계: 데이터 저장
-        if st.session_state.step == 2:
+            st.session_state.step = 3
             with st.spinner("데이터를 저장 중입니다..."):
-                try:
-                    file_path = save_data(st.session_state.content, file_format)
-                    st.session_state.file_path = file_path
-                    st.session_state.step = 3
-                    st.success("3단계 완료: 데이터 저장 완료")
-                except Exception as e:
-                    st.error(f"데이터 저장 중 오류 발생: {e}")
+                file_path = save_data(st.session_state.content, file_format)
+                st.session_state.file_path = file_path
+                st.success("3단계 완료: 데이터 저장 완료")
+
+        asyncio.run(run_crawl())
 
 # 다운로드 버튼 유지
 if st.session_state.step == 3 and st.session_state.file_path:
