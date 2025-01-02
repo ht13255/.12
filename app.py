@@ -41,8 +41,9 @@ EXCLUDE_DOMAINS = [
 # 멀티스레드 개수 고정
 MAX_THREADS = 300
 
-@st.experimental_singleton
+@st.cache_resource
 def create_session():
+    """세션 생성 및 요청 재시도 설정"""
     session = requests.Session()
     retries = Retry(
         total=5,  # 총 재시도 횟수
@@ -72,8 +73,9 @@ def is_excluded_link(url):
     return False
 
 # 요청 보내기 함수
-@st.experimental_memo
+@st.cache_data
 def make_request(url, session):
+    """HTTP 요청 함수"""
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     proxies = {"http": random.choice(PROXIES)} if PROXIES else None
     try:
@@ -86,6 +88,7 @@ def make_request(url, session):
 
 # 내부 링크 추출
 def extract_internal_links(base_url, session, bloom_filter):
+    """내부 링크를 추출"""
     response = make_request(base_url, session)
     if not response:
         return []
@@ -110,6 +113,7 @@ def extract_internal_links(base_url, session, bloom_filter):
 
 # 링크 내용 크롤링
 def crawl_link(url, session):
+    """링크 내용을 크롤링"""
     response = make_request(url, session)
     if not response:
         return {"url": url, "content": None}
@@ -124,6 +128,7 @@ def crawl_link(url, session):
 
 # 재귀적으로 크롤링
 def recursive_crawl(base_url, max_depth, progress_callback=None):
+    """재귀적으로 링크를 크롤링"""
     session = create_session()
     bloom_filter = BloomFilter(max_elements=1000000, error_rate=0.01)
     all_data = []
@@ -160,6 +165,7 @@ def recursive_crawl(base_url, max_depth, progress_callback=None):
 
 # 작업 저장
 def save_to_file(data, filename, file_type='json'):
+    """결과를 파일에 저장"""
     try:
         os.makedirs("output", exist_ok=True)
         filepath = os.path.join("output", filename)
@@ -198,7 +204,6 @@ if st.button("크롤링 시작"):
             status_text.text(f"진행 중: {current}/{total} 링크 처리")
 
         try:
-            # 항상 최대 깊이를 유지
             max_depth = 10  # 최대 깊이
             crawled_data = recursive_crawl(base_url, max_depth, progress_callback)
 
