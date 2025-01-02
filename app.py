@@ -32,6 +32,24 @@ EXCLUDE_DOMAINS = [
 # 멀티스레드 개수 고정
 MAX_THREADS = 300
 
+# 요청 재시도 메커니즘
+def make_request(url, session, retries=3):
+    headers = {"User-Agent": random.choice(USER_AGENTS)}
+    for attempt in range(retries):
+        try:
+            response = session.get(url, headers=headers, timeout=2)
+            response.raise_for_status()
+            return response
+        except requests.exceptions.HTTPError as e:
+            st.warning(f"HTTP 오류 (코드 {response.status_code}) on {url}: {e}")
+            break  # HTTP 에러는 재시도하지 않음
+        except requests.exceptions.RequestException as e:
+            if attempt < retries - 1:
+                time.sleep(1)  # 재시도 전 대기
+            else:
+                st.warning(f"요청 실패 after {retries} retries: {url} - {e}")
+    return None
+
 # 링크 필터링 함수
 def is_excluded_link(url):
     parsed_url = urlparse(url)
@@ -50,12 +68,12 @@ def is_excluded_link(url):
 
 # 내부 링크 추출
 def extract_internal_links(base_url, session, bloom_filter):
-    try:
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        response = session.get(base_url, headers=headers, timeout=2)  # 타임아웃 2초로 설정
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+    response = make_request(base_url, session)
+    if not response:
+        return []
 
+    try:
+        soup = BeautifulSoup(response.text, 'html.parser')
         internal_links = set()
         for link in soup.find_all('a', href=True):
             url = urljoin(base_url, link['href'])
@@ -68,25 +86,20 @@ def extract_internal_links(base_url, session, bloom_filter):
             bloom_filter.add(url)
 
         return list(internal_links)
-    except requests.exceptions.RequestException as e:
-        st.warning(f"HTTP 요청 오류: {e}")
-        return []
     except Exception as e:
         st.error(f"내부 링크 추출 오류: {e}")
         return []
 
 # 링크 내용 크롤링
 def crawl_link(url, session):
+    response = make_request(url, session)
+    if not response:
+        return {"url": url, "content": None}
+
     try:
-        headers = {"User-Agent": random.choice(USER_AGENTS)}
-        response = session.get(url, headers=headers, timeout=2)  # 타임아웃 2초로 설정
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         content = soup.get_text(strip=True)
         return {"url": url, "content": content}
-    except requests.exceptions.RequestException as e:
-        st.warning(f"HTTP 요청 오류: {e}")
-        return {"url": url, "content": None}
     except Exception as e:
         st.error(f"링크 크롤링 오류: {e}")
         return {"url": url, "content": None}
@@ -149,9 +162,9 @@ def save_to_file(data, filename, file_type='json'):
         return None
 
 # Streamlit UI
-st.set_page_config(page_title="최적화된 크롤러", layout="centered")
+st.set_page_config(page_title="HTTP 오류 방지 크롤러", layout="centered")
 
-st.title("최적화된 HTTP/HTTPS 크롤러")
+st.title("HTTP 오류 방지 크롤러")
 st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
