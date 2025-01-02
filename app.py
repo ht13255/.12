@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from bloom_filter2 import BloomFilter
 import json
+import csv
 import os
 import time
 import random
@@ -20,23 +21,36 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
 ]
 
-# 멀티스레드 설정
-MAX_THREADS = 300
-CHUNK_SIZE = 500  # 한 번에 처리할 링크 개수
+# 프록시 리스트 (옵션)
+PROXIES = [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080"
+]
 
-# Bloom Filter 설정
-BLOOM_FILTER_CAPACITY = 10000000
-BLOOM_FILTER_ERROR_RATE = 0.01
+# 제외할 링크 키워드와 도메인
+EXCLUDE_KEYWORDS = [
+    "ad", "ads", "google", "facebook", "twitter", "instagram", "mail", "bet", "community", "login", "youtube",
+    "pinterest", "linkedin", "tumblr", "reddit", "tiktok", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
+]
+EXCLUDE_DOMAINS = [
+    "google.com", "facebook.com", "twitter.com", "instagram.com", "youtube.com",
+    "pinterest.com", "linkedin.com", "tumblr.com", "reddit.com", "tiktok.com"
+]
+
+# 멀티스레드 개수 고정
+MAX_THREADS = 300
+BATCH_SIZE = 500  # 한 번에 처리할 링크 개수 제한
 
 @st.cache_resource
 def create_session():
-    """HTTP 세션 생성 및 재시도 정책 설정"""
+    """세션 생성 및 요청 재시도 설정"""
     session = requests.Session()
     retries = Retry(
-        total=5,
-        backoff_factor=0.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["GET"]
+        total=5,  # 총 재시도 횟수
+        backoff_factor=0.5,  # 재시도 간 대기 시간 증가
+        status_forcelist=[429, 500, 502, 503, 504],  # 재시도할 HTTP 상태 코드
+        allowed_methods=["GET"]  # 재시도 허용 메서드
     )
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("http://", adapter)
@@ -45,135 +59,173 @@ def create_session():
 
 # 링크 필터링 함수
 def is_excluded_link(url):
-    exclude_keywords = [
-        "ad", "cookie", "popup", "login", "signup", "banner", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi"
-    ]
-    return any(keyword in url.lower() for keyword in exclude_keywords)
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc.lower()
 
-# 요청 함수
+    # 도메인 기반 필터링
+    if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
+        return True
+
+    # 키워드 기반 필터링
+    for keyword in EXCLUDE_KEYWORDS:
+        if keyword in url.lower():
+            return True
+
+    return False
+
+# 요청 보내기 함수
 def make_request(url, session):
+    """HTTP 요청 함수"""
     headers = {"User-Agent": random.choice(USER_AGENTS)}
+    proxies = {"http": random.choice(PROXIES)} if PROXIES else None
     try:
-        response = session.get(url, headers=headers, timeout=5)
+        response = session.get(url, headers=headers, proxies=proxies, timeout=5)
         response.raise_for_status()
         return response
-    except Exception as e:
-        st.warning(f"요청 실패: {url} - {e}")
+    except requests.exceptions.RequestException as e:
+        st.warning(f"요청 오류: {url} - {e}")
     return None
 
-# 링크 추출 함수
-def extract_links(base_url, session, bloom_filter):
+# 내부 링크 추출
+def extract_internal_links(base_url, session, bloom_filter):
+    """내부 링크를 추출"""
     response = make_request(base_url, session)
     if not response:
         return []
 
     try:
-        soup = BeautifulSoup(response.text, "html.parser")
-        links = set()
-        for link in soup.find_all("a", href=True):
-            url = urljoin(base_url, link["href"])
-            if url not in bloom_filter and not is_excluded_link(url):
-                links.add(url)
-                bloom_filter.add(url)
-        return list(links)
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        internal_links = set()
+        for link in soup.find_all('a', href=True):
+            url = urljoin(base_url, link['href'])
+
+            # 필터링 조건 확인
+            if url in bloom_filter or is_excluded_link(url):
+                continue
+
+            internal_links.add(url)
+            bloom_filter.add(url)
+
+        return list(internal_links)
     except Exception as e:
-        st.error(f"링크 추출 오류: {e}")
+        st.error(f"내부 링크 추출 오류: {e}")
         return []
 
-# 링크 크롤링 함수
+# 링크 내용 크롤링
 def crawl_link(url, session):
+    """링크 내용을 크롤링"""
     response = make_request(url, session)
     if not response:
         return {"url": url, "content": None}
 
     try:
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(response.text, 'html.parser')
         content = soup.get_text(strip=True)
         return {"url": url, "content": content}
     except Exception as e:
-        st.error(f"크롤링 오류: {e}")
+        st.error(f"링크 크롤링 오류: {e}")
         return {"url": url, "content": None}
 
-# 대량 크롤링 처리
-def bulk_crawl(urls, session):
-    results = []
-    with ThreadPoolExecutor(MAX_THREADS) as executor:
-        futures = {executor.submit(crawl_link, url, session): url for url in urls}
-        for future in as_completed(futures):
-            try:
-                results.append(future.result())
-            except Exception as e:
-                st.warning(f"스레드 작업 실패: {e}")
-    return results
+# 배치 단위로 링크 크롤링
+def process_links_in_batches(links, session, progress_callback=None):
+    """배치 단위로 링크 크롤링"""
+    all_data = []
+    for i in range(0, len(links), BATCH_SIZE):
+        batch_links = links[i:i + BATCH_SIZE]
+        with ThreadPoolExecutor(MAX_THREADS) as executor:
+            futures = {executor.submit(crawl_link, url, session): url for url in batch_links}
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    if result["content"]:
+                        all_data.append(result)
+                    if progress_callback:
+                        progress_callback(len(all_data), len(links))
+                except Exception as e:
+                    st.warning(f"스레드 작업 오류: {e}")
+    return all_data
 
-# 상태 저장 함수
-def save_progress(data, filepath="progress.json"):
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-# 진행 상태 불러오기
-def load_progress(filepath="progress.json"):
-    if os.path.exists(filepath):
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return []
-
-# 재귀적 크롤링
-def recursive_crawl(start_url, max_depth, progress_callback=None):
+# 재귀적으로 크롤링
+def recursive_crawl(base_url, max_depth, progress_callback=None):
+    """재귀적으로 링크를 크롤링"""
     session = create_session()
-    bloom_filter = BloomFilter(max_elements=BLOOM_FILTER_CAPACITY, error_rate=BLOOM_FILTER_ERROR_RATE)
-    to_crawl = [start_url]
-    all_results = []
-    depth = 1
+    bloom_filter = BloomFilter(max_elements=1000000, error_rate=0.01)
+    all_data = []
+    visited_count = 0  # Progress tracking
 
-    while to_crawl and depth <= max_depth:
-        chunk = to_crawl[:CHUNK_SIZE]
-        to_crawl = to_crawl[CHUNK_SIZE:]
+    def crawl_recursive(urls, depth):
+        nonlocal visited_count
+        if depth > max_depth or not urls:
+            return []
 
-        # 크롤링 처리
-        results = bulk_crawl(chunk, session)
-        all_results.extend(results)
+        next_urls = []
+        data = process_links_in_batches(urls, session, progress_callback)
+        all_data.extend(data)
 
-        # 링크 추출 및 큐에 추가
-        for result in results:
-            if result["content"]:
-                links = extract_links(result["url"], session, bloom_filter)
-                to_crawl.extend(links)
+        # 내부 링크 추출 (다음 깊이로 이동)
+        for url in urls:
+            links = extract_internal_links(url, session, bloom_filter)
+            next_urls.extend(links)
 
-        # 진행 상황 업데이트 및 상태 저장
-        if progress_callback:
-            progress_callback(len(all_results), len(to_crawl))
-        save_progress(all_results)
+        return crawl_recursive(next_urls, depth + 1)
 
-        depth += 1
+    crawl_recursive([base_url], 1)
+    return all_data
 
-    return all_results
+# 작업 저장
+def save_to_file(data, filename, file_type='json'):
+    """결과를 파일에 저장"""
+    try:
+        os.makedirs("output", exist_ok=True)
+        filepath = os.path.join("output", filename)
+
+        if file_type == 'json':
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=4)
+        elif file_type == 'csv':
+            with open(filepath, "w", encoding="utf-8", newline="") as f:
+                writer = csv.writer(f)
+                writer.writerow(["URL", "Content"])
+                for entry in data:
+                    writer.writerow([entry["url"], entry["content"]])
+
+        return filepath
+    except Exception as e:
+        st.error(f"파일 저장 오류: {e}")
+        return None
 
 # Streamlit UI
-st.set_page_config(page_title="대량 링크 크롤러", layout="wide")
+st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 
-st.title("대량 링크 크롤러")
-st.markdown("**만 개 이상의 링크를 안정적으로 크롤링합니다.**")
+st.title("HTTP 요청 지속 크롤러")
+st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
 
-base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS):")
-max_depth = st.slider("크롤링 깊이", 1, 20, 5)
+base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
+file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
 
 if st.button("크롤링 시작"):
     if base_url:
         progress_bar = st.progress(0)
         status_text = st.empty()
 
-        def progress_callback(crawled, remaining):
-            progress_bar.progress(crawled / (crawled + remaining))
-            status_text.text(f"크롤링 중: {crawled} 완료, {remaining} 남음")
+        def progress_callback(current, total):
+            progress_bar.progress(min(current / total, 1.0))
+            status_text.text(f"진행 중: {current}/{total} 링크 처리")
 
         try:
-            results = recursive_crawl(base_url, max_depth, progress_callback)
-            st.success(f"크롤링 완료! 총 {len(results)} 개의 링크 처리.")
-            save_file = "crawled_results.json"
-            save_progress(results, save_file)
-            with open(save_file, "rb") as f:
-                st.download_button("결과 다운로드", f, file_name=save_file)
+            max_depth = 10  # 최대 깊이
+            crawled_data = recursive_crawl(base_url, max_depth, progress_callback)
+
+            # 파일 저장
+            timestamp = int(time.time())
+            filename = f"crawled_data_{timestamp}.{file_type}"
+            filepath = save_to_file(crawled_data, filename, file_type)
+
+            if filepath:
+                st.success("크롤링 완료!")
+                with open(filepath, "rb") as f:
+                    st.download_button("결과 다운로드", data=f.read(), file_name=filename)
         except Exception as e:
             st.error(f"크롤링 오류: {e}")
     else:
