@@ -74,12 +74,12 @@ def is_excluded_link(url):
 
 # 요청 보내기 함수
 @st.cache_data
-def make_request(url, session):
+def make_request(url, _session):
     """HTTP 요청 함수"""
     headers = {"User-Agent": random.choice(USER_AGENTS)}
     proxies = {"http": random.choice(PROXIES)} if PROXIES else None
     try:
-        response = session.get(url, headers=headers, proxies=proxies, timeout=5)
+        response = _session.get(url, headers=headers, proxies=proxies, timeout=5)
         response.raise_for_status()
         return response
     except requests.exceptions.RequestException as e:
