@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from bloom_filter2 import BloomFilter
@@ -10,13 +12,20 @@ import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# 헤더 설정 (User-Agent 회전)
+# User-Agent 리스트
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (iPhone; CPU iPhone OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
     "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
+]
+
+# 프록시 리스트 (옵션)
+PROXIES = [
+    "http://proxy1.example.com:8080",
+    "http://proxy2.example.com:8080",
+    "http://proxy3.example.com:8080"
 ]
 
 # 제외할 링크 키워드와 도메인
@@ -32,23 +41,19 @@ EXCLUDE_DOMAINS = [
 # 멀티스레드 개수 고정
 MAX_THREADS = 300
 
-# 요청 재시도 메커니즘
-def make_request(url, session, retries=3):
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
-    for attempt in range(retries):
-        try:
-            response = session.get(url, headers=headers, timeout=2)
-            response.raise_for_status()
-            return response
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"HTTP 오류 (코드 {response.status_code}) on {url}: {e}")
-            break  # HTTP 에러는 재시도하지 않음
-        except requests.exceptions.RequestException as e:
-            if attempt < retries - 1:
-                time.sleep(1)  # 재시도 전 대기
-            else:
-                st.warning(f"요청 실패 after {retries} retries: {url} - {e}")
-    return None
+@st.experimental_singleton
+def create_session():
+    session = requests.Session()
+    retries = Retry(
+        total=5,  # 총 재시도 횟수
+        backoff_factor=0.5,  # 재시도 간 대기 시간 증가
+        status_forcelist=[429, 500, 502, 503, 504],  # 재시도할 HTTP 상태 코드
+        allowed_methods=["GET"]  # 재시도 허용 메서드
+    )
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 # 링크 필터링 함수
 def is_excluded_link(url):
@@ -65,6 +70,19 @@ def is_excluded_link(url):
             return True
 
     return False
+
+# 요청 보내기 함수
+@st.experimental_memo
+def make_request(url, session):
+    headers = {"User-Agent": random.choice(USER_AGENTS)}
+    proxies = {"http": random.choice(PROXIES)} if PROXIES else None
+    try:
+        response = session.get(url, headers=headers, proxies=proxies, timeout=5)
+        response.raise_for_status()
+        return response
+    except requests.exceptions.RequestException as e:
+        st.warning(f"요청 오류: {url} - {e}")
+    return None
 
 # 내부 링크 추출
 def extract_internal_links(base_url, session, bloom_filter):
@@ -106,7 +124,7 @@ def crawl_link(url, session):
 
 # 재귀적으로 크롤링
 def recursive_crawl(base_url, max_depth, progress_callback=None):
-    session = requests.Session()
+    session = create_session()
     bloom_filter = BloomFilter(max_elements=1000000, error_rate=0.01)
     all_data = []
     visited_count = 0  # Progress tracking
@@ -162,9 +180,9 @@ def save_to_file(data, filename, file_type='json'):
         return None
 
 # Streamlit UI
-st.set_page_config(page_title="HTTP 오류 방지 크롤러", layout="centered")
+st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 
-st.title("HTTP 오류 방지 크롤러")
+st.title("HTTP 요청 지속 크롤러")
 st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
