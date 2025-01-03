@@ -18,6 +18,15 @@ USER_AGENTS = [
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 
+# 제외할 도메인과 URL 키워드
+EXCLUDE_DOMAINS = [
+    "wordpress.com", "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "youtube.com",
+    "pinterest.com", "tumblr.com", "reddit.com", "tiktok.com"
+]
+EXCLUDE_KEYWORDS = [
+    "ad", "ads", "login", "signup", "register", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
+]
+
 # Streamlit 페이지 구성
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 st.title("HTTP 요청 지속 크롤러")
@@ -27,7 +36,7 @@ base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두
 max_depth = st.slider("크롤링 최대 깊이", 1, 5, 3)
 batch_size = st.slider("배치 크기 (URL 처리 단위)", 100, 2000, 1000)
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
-st.write("작업 중 랜덤 딜레이가 추가되어 서버 부하를 방지합니다.")
+st.write("WordPress 및 주요 소셜 미디어 링크를 제외합니다.")
 
 if st.button("크롤링 시작"):
     if not base_url:
@@ -50,6 +59,21 @@ if st.button("크롤링 시작"):
         failed_links = []
 
         # 함수 정의
+        def is_excluded_link(url):
+            """도메인 및 URL 키워드 기반 제외 필터링"""
+            parsed_url = urlparse(url)
+            domain = parsed_url.netloc.lower()
+
+            # 도메인 필터링
+            if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
+                return True
+
+            # URL 키워드 필터링
+            if any(keyword in url.lower() for keyword in EXCLUDE_KEYWORDS):
+                return True
+
+            return False
+
         def make_request(url):
             headers = {"User-Agent": random.choice(USER_AGENTS)}
             try:
@@ -69,6 +93,10 @@ if st.button("크롤링 시작"):
             return soup
 
         def crawl_link(url):
+            if is_excluded_link(url):
+                st.info(f"제외된 링크: {url}")
+                return {"url": url, "content": None}
+
             response = make_request(url)
             if not response:
                 failed_links.append(url)
@@ -94,7 +122,7 @@ if st.button("크롤링 시작"):
                 links = []
                 for link in soup.find_all("a", href=True):
                     full_url = urljoin(base_url, link["href"])
-                    if full_url not in bloom_filter:
+                    if full_url not in bloom_filter and not is_excluded_link(full_url):
                         bloom_filter.add(full_url)
                         links.append(full_url)
                 return links
