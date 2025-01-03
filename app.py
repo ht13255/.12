@@ -8,7 +8,6 @@ from bloom_filter2 import BloomFilter
 import json
 import time
 import random
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # User-Agent 리스트
@@ -27,16 +26,18 @@ EXCLUDE_KEYWORDS = [
     "ad", "ads", "login", "signup", "register", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
 ]
 
+# 크롤링 기본 설정
+MAX_THREADS = 300  # 최대 스레드 고정
+BATCH_SIZE = 2000  # 최대 배치 크기 고정
+MAX_DEPTH = 5      # 최대 크롤링 깊이 고정
+
 # Streamlit 페이지 구성
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 st.title("HTTP 요청 지속 크롤러")
-st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
+st.markdown("**URL을 입력하고 크롤링을 시작하세요. WordPress 및 주요 소셜 미디어 링크는 제외됩니다.**")
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
-max_depth = st.slider("크롤링 최대 깊이", 1, 5, 3)
-batch_size = st.slider("배치 크기 (URL 처리 단위)", 100, 2000, 1000)
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
-st.write("WordPress 및 주요 소셜 미디어 링크를 제외합니다.")
 
 if st.button("크롤링 시작"):
     if not base_url:
@@ -131,8 +132,8 @@ if st.button("크롤링 시작"):
                 return []
 
         def divide_batches(data):
-            for i in range(0, len(data), batch_size):
-                yield data[i:i + batch_size]
+            for i in range(0, len(data), BATCH_SIZE):
+                yield data[i:i + BATCH_SIZE]
 
         # 크롤링 시작
         progress_bar = st.progress(0)
@@ -140,12 +141,11 @@ if st.button("크롤링 시작"):
 
         try:
             queue = [base_url]
-            for depth in range(max_depth):
-                st.write(f"현재 깊이: {depth + 1}/{max_depth}")
+            for _ in range(MAX_DEPTH):  # 깊이 루프
                 next_queue = []
                 batch_count = 0
                 for batch in divide_batches(queue):
-                    with ThreadPoolExecutor(max_workers=10) as executor:
+                    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
                         futures = {executor.submit(crawl_link, url): url for url in batch}
                         for future in as_completed(futures):
                             result = future.result()
