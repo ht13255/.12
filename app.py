@@ -38,9 +38,10 @@ EXCLUDE_PATTERNS = ["cookie", "banner", "popup", "guide", "ad", "subscribe", "fo
 MAX_THREADS = 300
 BATCH_SIZE = 2000  # 한 번에 처리할 최대 링크 수
 
+# 초기화 세션 정보
 @st.cache_resource
-def create_session():
-    """세션 생성 및 요청 재시도 설정"""
+def reset_session():
+    """세션 초기화 및 재시도 설정"""
     session = requests.Session()
     retries = Retry(
         total=5,  # 총 재시도 횟수
@@ -52,6 +53,22 @@ def create_session():
     session.mount("http://", adapter)
     session.mount("https://", adapter)
     return session
+
+# 링크 필터링 함수
+def is_excluded_link(url):
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc.lower()
+
+    # 도메인 기반 필터링
+    if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
+        return True
+
+    # 키워드 기반 필터링
+    for keyword in EXCLUDE_KEYWORDS:
+        if keyword in url.lower():
+            return True
+
+    return False
 
 # 리스트를 배치로 나누기
 def divide_batches(data, batch_size):
@@ -110,10 +127,11 @@ def extract_internal_links(base_url, session, bloom_filter):
         return []
 
 # 링크 내용 크롤링
-def crawl_link(url, session):
+def crawl_link(url, session, failed_links):
     """링크 내용을 크롤링"""
     response = make_request(url, session)
     if not response:
+        failed_links.append(url)
         return {"url": url, "content": None}
 
     try:
@@ -123,14 +141,16 @@ def crawl_link(url, session):
         return {"url": url, "content": content}
     except Exception as e:
         st.error(f"링크 크롤링 오류: {e}")
+        failed_links.append(url)
         return {"url": url, "content": None}
 
 # 재귀적으로 크롤링
 def recursive_crawl(base_url, max_depth, progress_callback=None):
     """재귀적으로 링크를 크롤링"""
-    session = create_session()
+    session = reset_session()  # 세션 초기화
     bloom_filter = BloomFilter(max_elements=1000000, error_rate=0.01)
     all_data = []
+    failed_links = []  # 오류 발생 링크 저장
     visited_count = 0  # Progress tracking
 
     def crawl_recursive(urls, depth):
@@ -141,7 +161,7 @@ def recursive_crawl(base_url, max_depth, progress_callback=None):
         next_urls = []
         for batch in divide_batches(urls, BATCH_SIZE):
             with ThreadPoolExecutor(MAX_THREADS) as executor:
-                futures = {executor.submit(crawl_link, url, session): url for url in batch}
+                futures = {executor.submit(crawl_link, url, session, failed_links): url for url in batch}
                 for future in as_completed(futures):
                     try:
                         result = future.result()
@@ -161,7 +181,7 @@ def recursive_crawl(base_url, max_depth, progress_callback=None):
         return crawl_recursive(next_urls, depth + 1)
 
     crawl_recursive([base_url], 1)
-    return all_data
+    return all_data, failed_links
 
 # 작업 저장
 def save_to_file(data, filename, file_type='json'):
@@ -188,40 +208,24 @@ def save_to_file(data, filename, file_type='json'):
 # Streamlit UI
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 
-# 세션 상태 초기화 함수
-def reset_session():
-    st.session_state.crawled_data = []
-    st.session_state.progress = 0
-    st.session_state.status_text = ""
-
-if "crawled_data" not in st.session_state:
-    reset_session()
-
 st.title("HTTP 요청 지속 크롤러")
 st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
 
-base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):", key="base_url")
-file_type = st.selectbox("저장 형식 선택", ["json", "csv"], key="file_type")
-
-if st.button("초기화"):
-    reset_session()
-    st.experimental_rerun()
+base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
+file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
 
 if st.button("크롤링 시작"):
-    reset_session()  # 실행 전에 상태 초기화
     if base_url:
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         def progress_callback(current, total):
             progress_bar.progress(min(current / total, 1.0))
-            st.session_state.status_text = f"진행 중: {current}/{total} 링크 처리"
-            status_text.text(st.session_state.status_text)
+            status_text.text(f"진행 중: {current}/{total} 링크 처리")
 
         try:
             max_depth = 10  # 최대 깊이
-            crawled_data = recursive_crawl(base_url, max_depth, progress_callback)
-            st.session_state.crawled_data = crawled_data
+            crawled_data, failed_links = recursive_crawl(base_url, max_depth, progress_callback)
 
             # 파일 저장
             timestamp = int(time.time())
@@ -232,6 +236,12 @@ if st.button("크롤링 시작"):
                 st.success("크롤링 완료!")
                 with open(filepath, "rb") as f:
                     st.download_button("결과 다운로드", data=f.read(), file_name=filename)
+
+            # 오류 발생 링크 표시
+            if failed_links:
+                st.warning(f"오류가 발생한 링크 {len(failed_links)}개가 있습니다.")
+                st.write(failed_links)
+
         except Exception as e:
             st.error(f"크롤링 오류: {e}")
     else:
