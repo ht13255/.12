@@ -21,13 +21,6 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPad; CPU OS 14_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1",
 ]
 
-# 프록시 리스트 (옵션)
-PROXIES = [
-    "http://proxy1.example.com:8080",
-    "http://proxy2.example.com:8080",
-    "http://proxy3.example.com:8080"
-]
-
 # 제외할 링크 키워드와 도메인
 EXCLUDE_KEYWORDS = [
     "ad", "ads", "google", "facebook", "twitter", "instagram", "mail", "bet", "community", "login", "youtube",
@@ -38,9 +31,12 @@ EXCLUDE_DOMAINS = [
     "pinterest.com", "linkedin.com", "tumblr.com", "reddit.com", "tiktok.com"
 ]
 
+# 제외할 HTML 요소 패턴
+EXCLUDE_PATTERNS = ["cookie", "banner", "popup", "guide", "ad", "subscribe", "footer", "header"]
+
 # 멀티스레드 개수 고정
 MAX_THREADS = 300
-BATCH_SIZE = 500  # 한 번에 처리할 링크 개수 제한
+BATCH_SIZE = 2000  # 한 번에 처리할 최대 링크 수
 
 @st.cache_resource
 def create_session():
@@ -73,18 +69,34 @@ def is_excluded_link(url):
 
     return False
 
+# 리스트를 배치로 나누기
+def divide_batches(data, batch_size):
+    """리스트를 batch_size 단위로 분할"""
+    for i in range(0, len(data), batch_size):
+        yield data[i:i + batch_size]
+
 # 요청 보내기 함수
-def make_request(url, session):
+@st.cache_data
+def make_request(url, _session):
     """HTTP 요청 함수"""
     headers = {"User-Agent": random.choice(USER_AGENTS)}
-    proxies = {"http": random.choice(PROXIES)} if PROXIES else None
     try:
-        response = session.get(url, headers=headers, proxies=proxies, timeout=5)
+        response = _session.get(url, headers=headers, timeout=5)
         response.raise_for_status()
         return response
     except requests.exceptions.RequestException as e:
         st.warning(f"요청 오류: {url} - {e}")
     return None
+
+# HTML에서 제외할 요소 제거
+def clean_html(soup):
+    """HTML에서 불필요한 요소 제거"""
+    for pattern in EXCLUDE_PATTERNS:
+        for element in soup.find_all(class_=lambda value: value and pattern in value.lower()):
+            element.decompose()
+        for element in soup.find_all(id=lambda value: value and pattern in value.lower()):
+            element.decompose()
+    return soup
 
 # 내부 링크 추출
 def extract_internal_links(base_url, session, bloom_filter):
@@ -95,6 +107,7 @@ def extract_internal_links(base_url, session, bloom_filter):
 
     try:
         soup = BeautifulSoup(response.text, 'html.parser')
+        soup = clean_html(soup)  # 불필요한 요소 제거
 
         internal_links = set()
         for link in soup.find_all('a', href=True):
@@ -121,30 +134,12 @@ def crawl_link(url, session):
 
     try:
         soup = BeautifulSoup(response.text, 'html.parser')
+        soup = clean_html(soup)  # 불필요한 요소 제거
         content = soup.get_text(strip=True)
         return {"url": url, "content": content}
     except Exception as e:
         st.error(f"링크 크롤링 오류: {e}")
         return {"url": url, "content": None}
-
-# 배치 단위로 링크 크롤링
-def process_links_in_batches(links, session, progress_callback=None):
-    """배치 단위로 링크 크롤링"""
-    all_data = []
-    for i in range(0, len(links), BATCH_SIZE):
-        batch_links = links[i:i + BATCH_SIZE]
-        with ThreadPoolExecutor(MAX_THREADS) as executor:
-            futures = {executor.submit(crawl_link, url, session): url for url in batch_links}
-            for future in as_completed(futures):
-                try:
-                    result = future.result()
-                    if result["content"]:
-                        all_data.append(result)
-                    if progress_callback:
-                        progress_callback(len(all_data), len(links))
-                except Exception as e:
-                    st.warning(f"스레드 작업 오류: {e}")
-    return all_data
 
 # 재귀적으로 크롤링
 def recursive_crawl(base_url, max_depth, progress_callback=None):
@@ -160,13 +155,24 @@ def recursive_crawl(base_url, max_depth, progress_callback=None):
             return []
 
         next_urls = []
-        data = process_links_in_batches(urls, session, progress_callback)
-        all_data.extend(data)
+        for batch in divide_batches(urls, BATCH_SIZE):
+            with ThreadPoolExecutor(MAX_THREADS) as executor:
+                futures = {executor.submit(crawl_link, url, session): url for url in batch}
+                for future in as_completed(futures):
+                    try:
+                        result = future.result()
+                        visited_count += 1
+                        if progress_callback:
+                            progress_callback(visited_count, len(urls))
+                        if result["content"]:
+                            all_data.append(result)
+                    except Exception as e:
+                        st.warning(f"스레드 작업 오류: {e}")
 
-        # 내부 링크 추출 (다음 깊이로 이동)
-        for url in urls:
-            links = extract_internal_links(url, session, bloom_filter)
-            next_urls.extend(links)
+            # 내부 링크 추출 (다음 깊이로 이동)
+            for url in batch:
+                links = extract_internal_links(url, session, bloom_filter)
+                next_urls.extend(links)
 
         return crawl_recursive(next_urls, depth + 1)
 
