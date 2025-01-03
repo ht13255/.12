@@ -53,22 +53,6 @@ def create_session():
     session.mount("https://", adapter)
     return session
 
-# 링크 필터링 함수
-def is_excluded_link(url):
-    parsed_url = urlparse(url)
-    domain = parsed_url.netloc.lower()
-
-    # 도메인 기반 필터링
-    if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
-        return True
-
-    # 키워드 기반 필터링
-    for keyword in EXCLUDE_KEYWORDS:
-        if keyword in url.lower():
-            return True
-
-    return False
-
 # 리스트를 배치로 나누기
 def divide_batches(data, batch_size):
     """리스트를 batch_size 단위로 분할"""
@@ -204,24 +188,40 @@ def save_to_file(data, filename, file_type='json'):
 # Streamlit UI
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 
+# 세션 상태 초기화 함수
+def reset_session():
+    st.session_state.crawled_data = []
+    st.session_state.progress = 0
+    st.session_state.status_text = ""
+
+if "crawled_data" not in st.session_state:
+    reset_session()
+
 st.title("HTTP 요청 지속 크롤러")
 st.markdown("**URL을 입력하고 크롤링 옵션을 설정하세요.**")
 
-base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
-file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
+base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):", key="base_url")
+file_type = st.selectbox("저장 형식 선택", ["json", "csv"], key="file_type")
+
+if st.button("초기화"):
+    reset_session()
+    st.experimental_rerun()
 
 if st.button("크롤링 시작"):
+    reset_session()  # 실행 전에 상태 초기화
     if base_url:
         progress_bar = st.progress(0)
         status_text = st.empty()
 
         def progress_callback(current, total):
             progress_bar.progress(min(current / total, 1.0))
-            status_text.text(f"진행 중: {current}/{total} 링크 처리")
+            st.session_state.status_text = f"진행 중: {current}/{total} 링크 처리"
+            status_text.text(st.session_state.status_text)
 
         try:
             max_depth = 10  # 최대 깊이
             crawled_data = recursive_crawl(base_url, max_depth, progress_callback)
+            st.session_state.crawled_data = crawled_data
 
             # 파일 저장
             timestamp = int(time.time())
