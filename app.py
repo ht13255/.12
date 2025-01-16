@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 
 # 제외할 도메인과 URL 키워드
@@ -26,18 +25,18 @@ EXCLUDE_KEYWORDS = [
     "ad", "ads", "login", "signup", "register", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
 ]
 
-# 크롤링 기본 설정
-MAX_THREADS = 300  # 최대 스레드 고정
-BATCH_SIZE = 2000  # 최대 배치 크기 고정
-MAX_DEPTH = 5      # 최대 크롤링 깊이 고정
+# 고정된 설정
+MAX_DEPTH = 5
+BATCH_SIZE = 2000
 
 # Streamlit 페이지 구성
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 st.title("HTTP 요청 지속 크롤러")
-st.markdown("**URL을 입력하고 크롤링을 시작하세요. WordPress 및 주요 소셜 미디어 링크는 제외됩니다.**")
+st.markdown("**URL을 입력하고 크롤링을 시작하세요. WordPress 및 소셜 미디어 링크는 제외됩니다.**")
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
+st.write("최대 성능으로 크롤링이 진행됩니다.")
 
 if st.button("크롤링 시작"):
     if not base_url:
@@ -76,15 +75,25 @@ if st.button("크롤링 시작"):
             return False
 
         def make_request(url):
+            """HTTP 요청 함수"""
             headers = {"User-Agent": random.choice(USER_AGENTS)}
             try:
                 time.sleep(random.uniform(0.1, 0.5))  # 랜덤 지연
                 response = session.get(url, headers=headers, timeout=10)
                 response.raise_for_status()
                 return response
+            except requests.exceptions.HTTPError as e:
+                # 404 오류 처리
+                if response.status_code == 404:
+                    st.warning(f"404 오류 (URL: {url}): {e}")
+                    failed_links.append(url)
+                else:
+                    st.warning(f"HTTP 오류 (URL: {url}): {e}")
+                    failed_links.append(url)
             except requests.exceptions.RequestException as e:
                 st.warning(f"요청 실패: {url} - {e}")
-                return None
+                failed_links.append(url)
+            return None
 
         def clean_html(soup):
             """HTML에서 불필요한 요소 제거"""
@@ -100,7 +109,6 @@ if st.button("크롤링 시작"):
 
             response = make_request(url)
             if not response:
-                failed_links.append(url)
                 return {"url": url, "content": None}
 
             try:
@@ -141,11 +149,11 @@ if st.button("크롤링 시작"):
 
         try:
             queue = [base_url]
-            for _ in range(MAX_DEPTH):  # 깊이 루프
+            for depth in range(MAX_DEPTH):
                 next_queue = []
                 batch_count = 0
                 for batch in divide_batches(queue):
-                    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
+                    with ThreadPoolExecutor(max_workers=10) as executor:
                         futures = {executor.submit(crawl_link, url): url for url in batch}
                         for future in as_completed(futures):
                             result = future.result()
@@ -156,7 +164,6 @@ if st.button("크롤링 시작"):
                         next_queue.extend(extract_links(url))
                     batch_count += 1
                     progress_bar.progress(min(batch_count / len(queue), 1.0))
-                    status_text.text(f"진행 상황: {batch_count}/{len(queue)} 배치 완료")
 
                 queue = next_queue
 
