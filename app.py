@@ -7,8 +7,8 @@ from urllib.parse import urljoin, urlparse
 from bloom_filter2 import BloomFilter
 import json
 import time
-import random
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import os
 
 # User-Agent 리스트
 USER_AGENTS = [
@@ -16,23 +16,34 @@ USER_AGENTS = [
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 
-# 제외할 도메인과 URL 키워드
+# 제외할 도메인 및 URL 키워드
 EXCLUDE_DOMAINS = [
     "wordpress.com", "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "youtube.com",
     "pinterest.com", "tumblr.com", "reddit.com", "tiktok.com"
 ]
 EXCLUDE_KEYWORDS = [
-    "ad", "ads", "login", "signup", "register", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
+    "ad", "ads", "login", "signup", "register", "subscribe", ".jpg", ".png", ".gif", ".mp4", ".mov", ".avi", ".webm"
 ]
 
 # 고정된 설정
-MAX_DEPTH = 5
+MAX_DEPTH = 10  # 크롤링 깊이 최대값
+MAX_THREADS = min(os.cpu_count() * 10, 1000)  # 최대 스레드 수
 BATCH_SIZE = 2000
+
+# 캐시 삭제
+st.cache_data.clear()
+st.cache_resource.clear()
 
 # Streamlit 페이지 구성
 st.set_page_config(page_title="HTTP 요청 지속 크롤러", layout="centered")
 st.title("HTTP 요청 지속 크롤러")
-st.markdown("**URL을 입력하고 크롤링을 시작하세요. WordPress 및 소셜 미디어 링크는 제외됩니다.**")
+st.markdown("**URL을 입력하고 크롤링을 시작하세요. HTTP와 HTTPS 모두 지원됩니다.**")
+
+# 세션 상태 초기화
+if "file_path" not in st.session_state:
+    st.session_state["file_path"] = None
+if "file_type" not in st.session_state:
+    st.session_state["file_type"] = None
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
@@ -45,7 +56,7 @@ if st.button("크롤링 시작"):
         session = requests.Session()
         retries = Retry(
             total=5,
-            backoff_factor=1,
+            backoff_factor=0.5,
             status_forcelist=[500, 502, 503, 504],
             allowed_methods=["GET"],
         )
@@ -76,20 +87,11 @@ if st.button("크롤링 시작"):
 
         def make_request(url):
             """HTTP 요청 함수"""
-            headers = {"User-Agent": random.choice(USER_AGENTS)}
+            headers = {"User-Agent": USER_AGENTS[0]}  # User-Agent 고정
             try:
-                time.sleep(random.uniform(0.1, 0.5))  # 랜덤 지연
                 response = session.get(url, headers=headers, timeout=10)
                 response.raise_for_status()
                 return response
-            except requests.exceptions.HTTPError as e:
-                # 404 오류 처리
-                if response.status_code == 404:
-                    st.warning(f"404 오류 (URL: {url}): {e}")
-                    failed_links.append(url)
-                else:
-                    st.warning(f"HTTP 오류 (URL: {url}): {e}")
-                    failed_links.append(url)
             except requests.exceptions.RequestException as e:
                 st.warning(f"요청 실패: {url} - {e}")
                 failed_links.append(url)
@@ -153,7 +155,7 @@ if st.button("크롤링 시작"):
                 next_queue = []
                 batch_count = 0
                 for batch in divide_batches(queue):
-                    with ThreadPoolExecutor(max_workers=10) as executor:
+                    with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
                         futures = {executor.submit(crawl_link, url): url for url in batch}
                         for future in as_completed(futures):
                             result = future.result()
@@ -173,9 +175,6 @@ if st.button("크롤링 시작"):
                 file_name = f"crawled_data_{timestamp}.json"
                 with open(file_name, "w", encoding="utf-8") as f:
                     json.dump(all_data, f, ensure_ascii=False, indent=4)
-                st.success("크롤링 완료!")
-                st.download_button("결과 다운로드 (JSON)", data=open(file_name, "rb").read(), file_name=file_name)
-
             elif file_type == "csv":
                 file_name = f"crawled_data_{timestamp}.csv"
                 with open(file_name, "w", encoding="utf-8", newline="") as f:
@@ -183,13 +182,20 @@ if st.button("크롤링 시작"):
                     writer.writerow(["URL", "Content"])
                     for item in all_data:
                         writer.writerow([item["url"], item["content"]])
-                st.success("크롤링 완료!")
-                st.download_button("결과 다운로드 (CSV)", data=open(file_name, "rb").read(), file_name=file_name)
 
-            # 실패한 링크 출력
-            if failed_links:
-                st.warning(f"실패한 링크 {len(failed_links)}개가 있습니다.")
-                st.write(failed_links)
+            # 파일 경로를 세션 상태에 저장
+            st.session_state["file_path"] = file_name
+            st.session_state["file_type"] = file_type
+            st.success("크롤링 완료!")
 
         except Exception as e:
             st.error(f"크롤링 오류: {e}")
+
+# 파일 다운로드 버튼 유지
+if st.session_state["file_path"]:
+    with open(st.session_state["file_path"], "rb") as f:
+        st.download_button(
+            f"결과 다운로드 ({st.session_state['file_type'].upper()})",
+            data=f,
+            file_name=st.session_state["file_path"],
+        )
