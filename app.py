@@ -40,10 +40,8 @@ st.title("HTTP 요청 지속 크롤러")
 st.markdown("**URL을 입력하고 크롤링을 시작하세요. HTTP와 HTTPS 모두 지원됩니다.**")
 
 # 세션 상태 초기화
-if "file_path" not in st.session_state:
-    st.session_state["file_path"] = None
-if "file_type" not in st.session_state:
-    st.session_state["file_type"] = None
+if "progress" not in st.session_state:
+    st.session_state["progress"] = 0
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
@@ -85,6 +83,11 @@ if st.button("크롤링 시작"):
 
             return False
 
+        def is_valid_url(url):
+            """URL의 유효성 검증"""
+            parsed = urlparse(url)
+            return parsed.scheme in ["http", "https"] and bool(parsed.netloc)
+
         def make_request(url):
             """HTTP 요청 함수"""
             headers = {"User-Agent": USER_AGENTS[0]}  # User-Agent 고정
@@ -105,7 +108,8 @@ if st.button("크롤링 시작"):
             return soup
 
         def crawl_link(url):
-            if is_excluded_link(url):
+            """URL에서 콘텐츠 크롤링"""
+            if is_excluded_link(url) or not is_valid_url(url):
                 st.info(f"제외된 링크: {url}")
                 return {"url": url, "content": None}
 
@@ -124,6 +128,7 @@ if st.button("크롤링 시작"):
                 return {"url": url, "content": None}
 
         def extract_links(url):
+            """링크 추출 및 유효성 검사"""
             response = make_request(url)
             if not response:
                 return []
@@ -133,7 +138,7 @@ if st.button("크롤링 시작"):
                 links = []
                 for link in soup.find_all("a", href=True):
                     full_url = urljoin(base_url, link["href"])
-                    if full_url not in bloom_filter and not is_excluded_link(full_url):
+                    if full_url not in bloom_filter and not is_excluded_link(full_url) and is_valid_url(full_url):
                         bloom_filter.add(full_url)
                         links.append(full_url)
                 return links
@@ -142,6 +147,7 @@ if st.button("크롤링 시작"):
                 return []
 
         def divide_batches(data):
+            """배치 단위로 링크 나누기"""
             for i in range(0, len(data), BATCH_SIZE):
                 yield data[i:i + BATCH_SIZE]
 
@@ -151,10 +157,12 @@ if st.button("크롤링 시작"):
 
         try:
             queue = [base_url]
+            total_links = 0
             for depth in range(MAX_DEPTH):
                 next_queue = []
                 batch_count = 0
                 for batch in divide_batches(queue):
+                    total_links += len(batch)
                     with ThreadPoolExecutor(max_workers=MAX_THREADS) as executor:
                         futures = {executor.submit(crawl_link, url): url for url in batch}
                         for future in as_completed(futures):
@@ -165,37 +173,29 @@ if st.button("크롤링 시작"):
                     for url in batch:
                         next_queue.extend(extract_links(url))
                     batch_count += 1
-                    progress_bar.progress(min(batch_count / len(queue), 1.0))
+                    progress = min((batch_count / len(queue)) * 100, 100)
+                    st.session_state["progress"] = progress
+                    progress_bar.progress(progress / 100)
+                    status_text.text(f"진행 중: {total_links}개의 링크 처리 완료")
 
                 queue = next_queue
 
             # 결과 저장
             timestamp = int(time.time())
-            if file_type == "json":
-                file_name = f"crawled_data_{timestamp}.json"
-                with open(file_name, "w", encoding="utf-8") as f:
+            file_name = f"crawled_data_{timestamp}.{file_type}"
+            with open(file_name, "w", encoding="utf-8", newline="") as f:
+                if file_type == "json":
                     json.dump(all_data, f, ensure_ascii=False, indent=4)
-            elif file_type == "csv":
-                file_name = f"crawled_data_{timestamp}.csv"
-                with open(file_name, "w", encoding="utf-8", newline="") as f:
+                elif file_type == "csv":
+                    import csv
                     writer = csv.writer(f)
                     writer.writerow(["URL", "Content"])
                     for item in all_data:
                         writer.writerow([item["url"], item["content"]])
 
-            # 파일 경로를 세션 상태에 저장
-            st.session_state["file_path"] = file_name
-            st.session_state["file_type"] = file_type
             st.success("크롤링 완료!")
+            with open(file_name, "rb") as f:
+                st.download_button("결과 다운로드", data=f, file_name=file_name)
 
         except Exception as e:
             st.error(f"크롤링 오류: {e}")
-
-# 파일 다운로드 버튼 유지
-if st.session_state["file_path"]:
-    with open(st.session_state["file_path"], "rb") as f:
-        st.download_button(
-            f"결과 다운로드 ({st.session_state['file_type'].upper()})",
-            data=f,
-            file_name=st.session_state["file_path"],
-        )
