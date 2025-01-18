@@ -14,7 +14,6 @@ import os
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 
 # 제외할 도메인 및 URL 키워드
@@ -36,9 +35,9 @@ st.cache_data.clear()
 st.cache_resource.clear()
 
 # Streamlit 페이지 구성
-st.set_page_config(page_title="링크 수집 후 내용 크롤러", layout="centered")
-st.title("링크 수집 후 내용 크롤러")
-st.markdown("**URL을 입력하고 크롤링을 시작하세요. HTTP와 HTTPS 모두 지원됩니다.**")
+st.set_page_config(page_title="링크 및 콘텐츠 크롤러", layout="centered")
+st.title("링크 및 콘텐츠 크롤러")
+st.markdown("**URL을 입력하고 크롤링을 시작하세요. 모든 링크를 탐색한 후 내용을 수집합니다.**")
 
 # 세션 상태 초기화
 if "collected_links" not in st.session_state:
@@ -48,7 +47,7 @@ if "progress" not in st.session_state:
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
-st.write("링크를 먼저 수집한 후, 내용을 크롤링합니다.")
+st.write("모든 연결된 링크를 수집한 후, 내용을 크롤링합니다.")
 
 if st.button("크롤링 시작"):
     if not base_url:
@@ -144,7 +143,7 @@ if st.button("크롤링 시작"):
                 return {"url": url, "content": None}
 
         # 1단계: 링크 수집
-        st.info("1단계: 링크를 수집 중입니다.")
+        st.info("1단계: 모든 링크를 수집 중입니다.")
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -160,6 +159,7 @@ if st.button("크롤링 시작"):
                             links = future.result()
                             if links:
                                 collected_links.extend(links)
+                                next_queue.extend(links)
                     batch_count += 1
                     progress = min((batch_count / len(queue)) * 100, 100)
                     st.session_state["progress"] = progress
