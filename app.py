@@ -14,11 +14,12 @@ import os
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
 ]
 
 # 제외할 도메인 및 URL 키워드
 EXCLUDE_DOMAINS = [
-    "wordpress.com", "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "youtube.com",
+    "facebook.com", "instagram.com", "twitter.com", "linkedin.com", "youtube.com",
     "pinterest.com", "tumblr.com", "reddit.com", "tiktok.com"
 ]
 EXCLUDE_KEYWORDS = [
@@ -35,9 +36,9 @@ st.cache_data.clear()
 st.cache_resource.clear()
 
 # Streamlit 페이지 구성
-st.set_page_config(page_title="링크 및 콘텐츠 크롤러", layout="centered")
-st.title("링크 및 콘텐츠 크롤러")
-st.markdown("**URL을 입력하고 크롤링을 시작하세요. 모든 링크를 탐색한 후 내용을 수집합니다.**")
+st.set_page_config(page_title="내부 링크 크롤러", layout="centered")
+st.title("내부 링크 크롤러")
+st.markdown("**URL을 입력하고 크롤링을 시작하세요. 외부 링크는 제외됩니다.**")
 
 # 세션 상태 초기화
 if "collected_links" not in st.session_state:
@@ -47,7 +48,7 @@ if "progress" not in st.session_state:
 
 base_url = st.text_input("크롤링할 URL을 입력하세요 (HTTP/HTTPS 모두 지원):")
 file_type = st.selectbox("저장 형식 선택", ["json", "csv"])
-st.write("모든 연결된 링크를 수집한 후, 내용을 크롤링합니다.")
+st.write("내부 링크만 수집한 후, 내용을 크롤링합니다.")
 
 if st.button("크롤링 시작"):
     if not base_url:
@@ -65,6 +66,7 @@ if st.button("크롤링 시작"):
         session.mount("https://", adapter)
 
         # 초기화
+        base_domain = urlparse(base_url).netloc  # 기본 URL의 도메인 추출
         bloom_filter = BloomFilter(max_elements=1000000, error_rate=0.01)
         collected_links = []
         failed_links = []
@@ -72,15 +74,17 @@ if st.button("크롤링 시작"):
 
         # 함수 정의
         def is_excluded_link(url):
-            """도메인 및 URL 키워드 기반 제외 필터링"""
+            """외부 링크 및 제외 조건 필터링"""
             parsed_url = urlparse(url)
             domain = parsed_url.netloc.lower()
 
-            # 도메인 필터링
-            if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
+            # 도메인 필터링: 외부 링크 제외
+            if domain != base_domain:
                 return True
 
-            # URL 키워드 필터링
+            # 제외 도메인 및 키워드 필터링
+            if any(excluded_domain in domain for excluded_domain in EXCLUDE_DOMAINS):
+                return True
             if any(keyword in url.lower() for keyword in EXCLUDE_KEYWORDS):
                 return True
 
@@ -143,7 +147,7 @@ if st.button("크롤링 시작"):
                 return {"url": url, "content": None}
 
         # 1단계: 링크 수집
-        st.info("1단계: 모든 링크를 수집 중입니다.")
+        st.info("1단계: 내부 링크를 수집 중입니다.")
         progress_bar = st.progress(0)
         status_text = st.empty()
 
@@ -164,12 +168,12 @@ if st.button("크롤링 시작"):
                     progress = min((batch_count / len(queue)) * 100, 100)
                     st.session_state["progress"] = progress
                     progress_bar.progress(progress / 100)
-                    status_text.text(f"진행 중: {len(collected_links)}개의 링크 수집 완료")
+                    status_text.text(f"진행 중: {len(collected_links)}개의 내부 링크 수집 완료")
 
                 queue = next_queue
 
             st.session_state["collected_links"] = collected_links
-            st.success(f"1단계 완료! 총 {len(collected_links)}개의 링크를 수집했습니다.")
+            st.success(f"1단계 완료! 총 {len(collected_links)}개의 내부 링크를 수집했습니다.")
 
         except Exception as e:
             st.error(f"링크 수집 오류: {e}")
